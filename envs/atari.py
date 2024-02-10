@@ -39,6 +39,7 @@ class Atari:
 
             self._image = Image
         import gym.envs.atari
+        # import gymnasium.envs.atari
 
         if name == "james_bond":
             name = "jamesbond"
@@ -51,12 +52,19 @@ class Atari:
         self._length = length
         self._random = np.random.RandomState(seed)
         with self.LOCK:
+            # self._env=gym.make(
+            #     "ALE/Pong-v5",
+            #     obs_type="image",
+            #     frameskip=1,
+            #     repeat_action_probability=0.25 if sticky else 0.0,
+            #     full_action_space=(actions == "all"),
+            #     )
             self._env = gym.envs.atari.AtariEnv(
                 game=name,
                 obs_type="image",
                 frameskip=1,
                 repeat_action_probability=0.25 if sticky else 0.0,
-                full_action_space=(actions == "all"),
+                # full_action_space=(actions == "all"),
             )
         assert self._env.unwrapped.get_action_meanings()[0] == "NOOP"
         shape = self._env.observation_space.shape

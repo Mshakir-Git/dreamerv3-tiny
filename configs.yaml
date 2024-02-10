@@ -9,11 +9,11 @@ defaults:
   deterministic_run: False
   steps: 1e6
   parallel: False
-  eval_every: 1e4
+  eval_every: 5
   eval_episode_num: 10
   log_every: 1e4
   reset_every: 0
-  device: 'cuda:0'
+  device: 'cpu'
   compile: True
   precision: 32
   debug: False
@@ -26,7 +26,7 @@ defaults:
   action_repeat: 2
   time_limit: 1000
   grayscale: False
-  prefill: 2500
+  prefill: 100
   reward_EMA: True
 
   # Model
@@ -62,7 +62,7 @@ defaults:
   initial: 'learned'
 
   # Training
-  batch_size: 16
+  batch_size: 1
   batch_length: 64
   train_ratio: 512
   pretrain: 100
@@ -132,10 +132,10 @@ crafter:
 atari100k:
   steps: 4e5
   envs: 1
-  action_repeat: 4
+  action_repeat: 2
   train_ratio: 1024
   video_pred_log: true
-  eval_episode_num: 100
+  eval_episode_num: 2
   actor: {dist: 'onehot', std: 'none'}
   imag_gradient: 'reinforce'
   stickey: False

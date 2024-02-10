@@ -7,6 +7,7 @@ import pathlib
 import re
 import time
 import random
+from typing import Any
 
 import numpy as np
 
@@ -16,6 +17,7 @@ from torch.nn import functional as F
 from torch import distributions as torchd
 from torch.utils.tensorboard import SummaryWriter
 
+from tinygrad import Tensor,dtypes , nn as tnn
 
 to_np = lambda x: x.detach().cpu().numpy()
 
@@ -23,10 +25,14 @@ to_np = lambda x: x.detach().cpu().numpy()
 def symlog(x):
     return torch.sign(x) * torch.log(torch.abs(x) + 1.0)
 
+def t_symlog(x):
+    return Tensor.sign(x) * Tensor.log(Tensor.abs(x) + 1.0)
 
 def symexp(x):
     return torch.sign(x) * (torch.exp(torch.abs(x)) - 1.0)
 
+def t_symexp(x):
+    return Tensor.sign(x) * (Tensor.exp(Tensor.abs(x)) - 1.0)
 
 class RequiresGrad:
     def __init__(self, model):
@@ -149,6 +155,7 @@ def simulate(
         step, episode, done, length, obs, agent_state, reward = state
     while (steps and step < steps) or (episodes and episode < episodes):
         # reset envs if necessary
+
         if done.any():
             indices = [index for index, d in enumerate(done) if d]
             results = [envs[i].reset() for i in indices]
@@ -164,11 +171,14 @@ def simulate(
                 # replace obs with done by initial state
                 obs[index] = result
         # step agents
+        # print("obs",obs)
         obs = {k: np.stack([o[k] for o in obs]) for k in obs[0] if "log_" not in k}
+        # print("obs next",obs)
+
         action, agent_state = agent(obs, done, agent_state)
         if isinstance(action, dict):
             action = [
-                {k: np.array(action[k][i].detach().cpu()) for k in action}
+                {k: np.array(action[k][i].detach().numpy()) for k in action}
                 for i in range(len(envs))
             ]
         else:
@@ -433,9 +443,14 @@ class OneHotDist(torchd.one_hot_categorical.OneHotCategorical):
             super().__init__(logits=logits, probs=probs)
 
     def mode(self):
+
         _mode = F.one_hot(
             torch.argmax(super().logits, axis=-1), super().logits.shape[-1]
         )
+        # print("***** mode ")
+        # print(torch.argmax(super().logits, axis=-1).shape)
+        # print(_mode.shape)
+        # exit()
         return _mode.detach() + super().logits - super().logits.detach()
 
     def sample(self, sample_shape=(), seed=None):
@@ -447,6 +462,307 @@ class OneHotDist(torchd.one_hot_categorical.OneHotCategorical):
             probs = probs[None]
         sample += probs - probs.detach()
         return sample
+    
+    # def log_prob(self,value):
+    #     ret=super().log_prob(value)
+    #     print(self.probs,ret)
+    #     exit()
+    #     return ret
+
+def logsumexp(x, axis=None,dim=1,keepdim=True):
+    """Compute the log of the sum of exponentials of input elements."""
+    x_max = Tensor.max(x, axis=axis, keepdim=True)
+    return Tensor.log(Tensor.sum(Tensor.exp(x - x_max), axis=axis, keepdim=True)) + x_max
+
+
+class OneHotCategoricalDistribution:
+    def __init__(self, probs , logits):
+        self.probs = probs
+        self._logits = logits - logsumexp(logits,dim=-1, keepdim=True)
+
+
+    def __call__(self):
+        return self
+    
+    # @property
+    # def probs(self):
+    #     return self.probs
+
+    @property
+    def logits(self):
+        return self._logits
+    
+    def sample(self,shape):
+        #Improve this
+        # print(self.probs,self.logits)
+        # probs = Tensor.softmax(self.logits)
+        # probs = probs * (1.0 - 0.01) + 0.01 / probs.shape[-1]
+        ret=np.zeros(self.probs.shape)
+        if(len(self.probs.shape[:-1])==2):
+            x,y=self.probs.shape[:-1]
+            for i in range(x):
+                for j in range(y):
+                    ret[i][j]=self.sample_one(self.probs[i][j])
+        elif(len(self.probs.shape[:-1])==1):
+            x=self.probs.shape[:-1][0]
+            for i in range(x):
+                    ret[i]=self.sample_one(self.probs[i])
+        # print(sum(self.probs.numpy()[0][0]),ret[0][0])
+        return Tensor(ret).cast(dtypes.float)
+    
+    def rand_sample(self):
+        ret=np.zeros(self.probs.shape)
+        if(len(self.probs.shape[:-1])==2):
+            x,y=self.probs.shape[:-1]
+            for i in range(x):
+                for j in range(y):
+                    ret[i][j]=self.sample_one_random(self.probs[i][j])
+        elif(len(self.probs.shape[:-1])==1):
+            x=self.probs.shape[:-1][0]
+            for i in range(x):
+                    ret[i]=self.sample_one_random(self.probs[i])
+        # print(sum(self.probs.numpy()[0][0]),ret[0][0])
+        return Tensor(ret).cast(dtypes.float)
+
+    def sample_one(self,probs):
+        # Generate a random number between 0 and 1
+        rand_num = np.random.rand()
+        # Accumulate the probabilities to find the category
+        cumulative_prob = 0.0
+        for i, prob in enumerate(probs):
+            cumulative_prob += prob
+            if rand_num < cumulative_prob:
+                sample = np.zeros(probs.shape)
+                sample[i] = 1
+                return sample
+            
+    def sample_one_random(self,probs):
+        # Generate a random number between 0 and 1
+        ret=np.zeros(probs.shape[0])
+        rand_num = int(np.random.rand()*(probs.shape[0]-0.1))
+        # Accumulate the probabilities to find the category
+        ret[rand_num]=1
+        return ret
+
+def one_hot(cat,classes):
+
+    ret=np.zeros((*cat.shape,classes))
+
+    # for i in range(len(cat.shape)):
+    if(len(ret.shape)==3):
+        for i in range(cat.shape[0]):
+            for j in range(cat.shape[1]):
+                ret[i][j][cat.numpy()[i][j]]=1
+    elif(len(ret.shape)==2):
+        for i in range(cat.shape[0]):
+                ret[i][cat.numpy()[i]]=1
+    elif(len(ret.shape)==4):
+        for i in range(cat.shape[0]):
+            for j in range(cat.shape[1]):
+                for k in range(cat.shape[2]):
+                    ret[i][j][k][cat.numpy()[i][j][k]]=1
+    else:
+        print("one_hot func len wrong",len(ret.shape))
+        raise KeyError
+    
+    return Tensor(ret,dtype=dtypes.float)
+     
+GLOBAL_COUNT=0
+class t_OneHotDist(OneHotCategoricalDistribution):
+    def __init__(self, logits=None, probs=None, unimix_ratio=0.0):
+        ##CHECK NORMALISATION (torch categorical)
+        if logits is not None and unimix_ratio > 0.0:
+            probs = Tensor.softmax(logits)
+            probs = probs * (1.0 - unimix_ratio) + unimix_ratio / probs.shape[-1]
+            logits = Tensor.log(probs).cast(dtypes.float)
+            super().__init__(logits=logits, probs=probs)
+        else:
+            probs = Tensor.softmax(logits)
+            super().__init__(logits=logits, probs=probs)
+
+    def mode(self):
+        _mode = one_hot(
+            Tensor.argmax(super().logits, axis=-1), super().logits.shape[-1]
+        )
+        # if(Tensor.argmax(super().logits, axis=-1).shape==(1,32)):
+        #     global GLOBAL_COUNT
+        #     GLOBAL_COUNT+=1
+        # print("big mode in",GLOBAL_COUNT)
+        # # print("mode",_mode.numpy())
+        # print("super().logits",super().logits.numpy())
+        # raise KeyError
+        ret=_mode.detach() + self.logits - self.logits.detach()
+        return ret
+
+    def sample(self, sample_shape=(), seed=None):
+        if seed is not None:
+            raise ValueError("need to check")
+        sample = super().sample(sample_shape)
+        probs = self.probs
+        while len(probs.shape) < len(sample.shape):
+            probs = probs[None]
+        # print("x.requires_grad",probs.requires_grad)
+        # exit()
+        prob_grad=probs - probs.detach()
+        ret = sample + prob_grad
+        return ret
+
+
+    
+    def entropy(self):
+        min_real = 2**((self.logits.dtype.itemsize*8)-1)
+        logits = Tensor.clip(self.logits, min_=-min_real ,max_=100000)
+        p_log_p:Tensor = logits * self.probs
+        return -p_log_p.sum(-1).cast(dtypes.float)
+    
+    def log_prob(self, value_in):
+        # raise  KeyError("Meh")
+        max=value_in.max(-1)
+
+        # print("log_prob",max.shape[0])
+        # exit()
+        #Check this in orig
+        if(max.shape[0]==1):
+            value = value_in.max(-1)[0]
+        else:
+            value = value_in.max(-1)[1]
+
+        value = value.cast(dtypes.float)
+        value = value.unsqueeze(-1)
+        value, log_pmf = Tensor._broadcasted(value,self.logits)
+        value = value[..., :1]
+        return log_pmf.gather(value,-1).squeeze(-1)
+
+# class t_OneHotDist(torchd.one_hot_categorical.OneHotCategorical):
+#     def __init__(self, logits=None, probs=None, unimix_ratio=0.0):
+#         Tensor.dim=lambda self:self.ndim
+#         Tensor.all=lambda self,dim:-1
+#         Tensor.ndimension=lambda self:self.ndim
+#         Tensor.size=lambda self:self.shape
+#         def logsumexp(x, axis=None,dim=1,keepdim=True):
+#             """Compute the log of the sum of exponentials of input elements."""
+#             x_max = Tensor.max(x, axis=axis, keepdim=True)
+#             return Tensor.log(Tensor.sum(Tensor.exp(x - x_max), axis=axis, keepdim=True)) + x_max
+#         Tensor.logsumexp=logsumexp
+#         if logits is not None and unimix_ratio > 0.0:
+#             probs = F.softmax(logits, dim=-1)
+#             probs = probs * (1.0 - unimix_ratio) + unimix_ratio / probs.shape[-1]
+#             print("tiny",probs.numpy)
+#             logits = Tensor.log(probs)
+#             super().__init__(logits=logits, probs=None)
+#         else:
+#             super().__init__(logits=logits, probs=probs)
+
+#     def mode(self):
+#         _mode = F.one_hot(
+#             Tensor.argmax(super().logits, axis=-1), super().logits.shape[-1]
+#         )
+#         return _mode.detach() + super().logits - super().logits.detach()
+
+#     def sample(self, sample_shape=(), seed=None):
+#         if seed is not None:
+#             raise ValueError("need to check")
+#         sample = super().sample(sample_shape)
+#         probs = super().probs
+#         while len(probs.shape) < len(sample.shape):
+#             probs = probs[None]
+#         sample += probs - probs.detach()
+#         return sample
+
+import tinygrad as tiny
+
+class t_DiscDist:
+    def __init__(
+        self,
+        logits,
+        low=-20.0,
+        high=20.0,
+        transfwd=t_symlog,
+        transbwd=t_symexp,
+        device="gpu",
+    ):
+        self.logits = logits
+        self.probs = Tensor.softmax(logits, -1)
+        self.buckets = Tensor(np.linspace(low, high, num=255)).cast(dtypes.float)
+        self.width = (self.buckets[-1] - self.buckets[0]) / 255
+        self.transfwd = transfwd
+        self.transbwd = transbwd
+
+    def mean(self):
+        _mean = self.probs * self.buckets
+        return self.transbwd(Tensor.sum(_mean, axis=-1, keepdim=True))
+
+    def mode(self):
+        _mode = self.probs * self.buckets
+        ret= self.transbwd(Tensor.sum(_mode, axis=-1, keepdim=True))
+        # print("_________mode")
+        # print(self.probs[0][0].numpy())
+        # print(Tensor.sum(_mode, axis=-1, keepdim=True).numpy())
+        # exit()
+        return ret
+
+    # Inside OneHotCategorical, log_prob is calculated using only max element in targets
+    def log_prob(self, x):
+
+        # x.requires_grad=False
+
+        x = self.transfwd(x)
+        # x(time, batch, 1)
+
+        # below = Tensor.sum((Tensor.clip((((x[..., None] - self.buckets)*1000000000) + 1) ,0,1)).cast(tiny.dtypes.int32), axis=-1) - 1
+        # above = self.buckets.shape[0] - Tensor.sum(
+        #     (Tensor.clip((self.buckets - x[..., None])*1000000000 ,0,1)).cast(tiny.dtypes.int32), axis=-1
+        # )
+
+        below = Tensor.sum((self.buckets <= x[..., None]).cast(tiny.dtypes.int32), axis=-1) - 1
+        above = self.buckets.shape[0] - Tensor.sum(
+            (self.buckets > x[..., None]).cast(tiny.dtypes.int32), axis=-1
+        )
+
+        # below.requires_grad=False
+        # above.requires_grad=False
+        # this is implemented using clip at the original repo as the gradients are not backpropagated for the out of limits.
+        below = Tensor.clip(below, 0, self.buckets.shape[0] - 1)
+        above = Tensor.clip(above, 0, self.buckets.shape[0] - 1)
+
+        equal = below == above
+        # equal = below - above
+        # print("Equal",equal.numpy())
+        # print("Equal",equal2.numpy())
+        # exit()
+        dist_to_below = Tensor.where(equal, 1, Tensor.abs(self.buckets[below] - x))
+        dist_to_above = Tensor.where(equal, 1, Tensor.abs(self.buckets[above] - x))
+        # dist_to_below.requires_grad=False
+        # dist_to_above.requires_grad=False
+
+        # zero_or_x_above=(Tensor.abs(self.buckets[above] - x)* Tensor.clip(((Tensor.abs(below - above)*1000000000) + 1),0,1))
+        # zero_or_x_below=(Tensor.abs(self.buckets[below] - x)* Tensor.clip(((Tensor.abs(below - above)*1000000000) + 1),0,1))
+        # one_or_zero=Tensor.clip( ((Tensor.abs(below - above)*-1000000000)+1),0,1)
+       
+        # dist_to_above=zero_or_x_above + one_or_zero
+        # dist_to_below=zero_or_x_below+ one_or_zero
+
+        # print(dist_to_above.numpy())
+        # print(dist_to_below.numpy())
+        # exit()
+
+        total = dist_to_below + dist_to_above
+        weight_below = dist_to_above / total
+        weight_above = dist_to_below / total
+        target = (
+            one_hot(below, classes=self.buckets.shape[0]) * weight_below[..., None]
+            + one_hot(above, classes=self.buckets.shape[0]) * weight_above[..., None]
+        )
+
+        log_pred = self.logits - logsumexp(self.logits, -1, keepdim=True)
+        target = target.squeeze(-2)
+
+        return (target * log_pred).sum(-1).cast(dtypes.float)
+
+    def log_prob_target(self, target):
+        log_pred = super().logits - logsumexp(super().logits, -1, keepdim=True)
+        return (target * log_pred).sum(-1)
+
 
 
 class DiscDist:
@@ -472,7 +788,10 @@ class DiscDist:
 
     def mode(self):
         _mode = self.probs * self.buckets
-        return self.transbwd(torch.sum(_mode, dim=-1, keepdim=True))
+        ret= self.transbwd(torch.sum(_mode, dim=-1, keepdim=True))
+        # print(torch.sum(_mode, dim=-1, keepdim=True).detach().numpy())
+        # exit()
+        return ret
 
     # Inside OneHotCategorical, log_prob is calculated using only max element in targets
     def log_prob(self, x):
@@ -489,9 +808,12 @@ class DiscDist:
 
         dist_to_below = torch.where(equal, 1, torch.abs(self.buckets[below] - x))
         dist_to_above = torch.where(equal, 1, torch.abs(self.buckets[above] - x))
+
+
         total = dist_to_below + dist_to_above
         weight_below = dist_to_above / total
         weight_above = dist_to_below / total
+        # print("torch onehot inputs",below.shape, len(self.buckets))
         target = (
             F.one_hot(below, num_classes=len(self.buckets)) * weight_below[..., None]
             + F.one_hot(above, num_classes=len(self.buckets)) * weight_above[..., None]
@@ -526,7 +848,120 @@ class MSEDist:
             loss = distance.sum(list(range(len(distance.shape)))[2:])
         else:
             raise NotImplementedError(self._agg)
+        if(hasattr(loss,"cast")):
+            return -loss.cast(dtypes.float)
+            
         return -loss
+
+import math
+from numbers import Real
+def _sum_rightmost(value, dim):
+    r"""
+    Sum out ``dim`` many rightmost dimensions of a given tensor.
+
+    Args:
+        value (Tensor): A tensor of ``.dim()`` at least ``dim``.
+        dim (int): The number of rightmost dims to sum out.
+    """
+    if dim == 0:
+        return value
+    required_shape = value.shape[:-dim] + (-1,)
+    return value.reshape(required_shape).sum(-1)
+
+class t_Normal:
+    r"""
+    Creates a normal (also called Gaussian) distribution parameterized by
+    :attr:`loc` and :attr:`scale`.
+
+    Example::
+
+        >>> # xdoctest: +IGNORE_WANT("non-deterinistic")
+        >>> m = Normal(torch.tensor([0.0]), torch.tensor([1.0]))
+        >>> m.sample()  # normally distributed with loc=0 and scale=1
+        tensor([ 0.1046])
+
+    Args:
+        loc (float or Tensor): mean of the distribution (often referred to as mu)
+        scale (float or Tensor): standard deviation of the distribution
+            (often referred to as sigma)
+    """
+
+    def __init__(self, shape,mean, std):
+            self._mean=mean
+            self.std=std
+            self._shape=shape
+
+    @property
+    def mean(self):
+        return self._mean
+
+    @property
+    def mode(self):
+        return self._mean
+
+    # @property
+    # def stddev(self):
+    #     return self.std
+
+    # @property
+    # def variance(self):
+    #     return self.stddev.pow(2)
+
+
+
+    # def expand(self, batch_shape, _instance=None):
+    #     new = self._get_checked_instance(Normal, _instance)
+    #     batch_shape = torch.Size(batch_shape)
+    #     new.loc = self.loc.expand(batch_shape)
+    #     new.scale = self.scale.expand(batch_shape)
+    #     super(Normal, new).__init__(batch_shape, validate_args=False)
+    #     new._validate_args = self._validate_args
+    #     return new
+
+    def sample(self):
+        # shape = self._extended_shape(sample_shape)
+        # with torch.no_grad():
+        return Tensor.normal(*self._shape,mean=self._mean, std=self.std)
+
+    # def rsample(self, sample_shape=torch.Size()):
+    #     shape = self._extended_shape(sample_shape)
+    #     eps = _standard_normal(shape, dtype=self.loc.dtype, device=self.loc.device)
+    #     return self.loc + eps * self.scale
+        
+    def entropy(self):
+        ret = 0.5 + 0.5 * math.log(2 * math.pi) + Tensor.log(self.std)
+        return _sum_rightmost(ret, 1).cast(dtypes.float)
+
+
+    def log_prob(self, value):
+        # compute the variance
+        var = self.std**2
+        log_scale = (
+            math.log(self.std) if isinstance(self.scale, Real) else self.scale.log()
+        )
+        return (
+            -((value - self._mean) ** 2) / (2 * var)
+            - log_scale
+            - math.log(math.sqrt(2 * math.pi))
+        )
+
+    # def cdf(self, value):
+    #     if self._validate_args:
+    #         self._validate_sample(value)
+    #     return 0.5 * (
+    #         1 + torch.erf((value - self.loc) * self.scale.reciprocal() / math.sqrt(2))
+    #     )
+
+    # def icdf(self, value):
+    #     return self.loc + self.scale * torch.erfinv(2 * value - 1) * math.sqrt(2)
+
+
+    # @property
+    # def _natural_params(self):
+    #     return (self.loc / self.scale.pow(2), -0.5 * self.scale.pow(2).reciprocal())
+
+    # def _log_normalizer(self, x, y):
+    #     return -0.25 * x.pow(2) / y + 0.5 * torch.log(-math.pi / y)
 
 
 class SymlogDist:
@@ -615,6 +1050,66 @@ class Bernoulli:
         log_probs1 = -F.softplus(-_logits)
 
         return torch.sum(log_probs0 * (1 - x) + log_probs1 * x, -1)
+    
+
+class t_Bernoulli_dist:
+
+    def __init__(self,logits):
+        self.logits=logits
+        self.probs=Tensor.sigmoid(logits) #for binary
+
+    @property
+    def mean(self):
+        return self.probs
+
+    @property
+    def variance(self):
+        return self.probs * (1 - self.probs)
+
+    def sample(self, sample_shape=torch.Size()):
+        pd=self.probs.expand(sample_shape)
+        print("b sample",pd)
+        exit()
+        return torch.bernoulli()
+
+    def log_prob(self, value):
+        if self._validate_args:
+            self._validate_sample(value)
+        logits, value = broadcast_all(self.logits, value)
+        return -binary_cross_entropy_with_logits(logits, value, reduction="none")
+
+    def entropy(self):
+        return binary_cross_entropy_with_logits(
+            self.logits, self.probs, reduction="none"
+        )
+    
+
+
+class t_Bernoulli:
+    def __init__(self,logits):
+        dist=t_Bernoulli_dist(logits)
+        self._dist = dist
+        self.mean = dist.mean
+
+    def __getattr__(self, name):
+        return getattr(self._dist, name)
+
+    def entropy(self):
+        return self._dist.entropy()
+
+    def mode(self):
+        _mode = Tensor.round(self._dist.mean)
+        return _mode.detach() + self._dist.mean - self._dist.mean.detach()
+
+    def sample(self, sample_shape=()):
+        return self._dist.sample(sample_shape)
+
+    def log_prob(self, x):
+        _logits = self._dist.logits
+        log_probs0 = -Tensor.softplus(_logits)
+        log_probs1 = -Tensor.softplus(-_logits)
+
+        return Tensor.sum(log_probs0 * (1 - x) + log_probs1 * x, -1).cast(dtypes.float)
 
 
 class UnnormalizedHuber(torchd.normal.Normal):
@@ -690,6 +1185,8 @@ def static_scan_for_lambda_return(fn, inputs, start):
 
 
 def lambda_return(reward, value, pcont, bootstrap, lambda_, axis):
+    # print(value.detach().numpy())
+    # exit()
     # Setting lambda=1 gives a discounted Monte Carlo return.
     # Setting lambda=0 gives a fixed 1-step return.
     # assert reward.shape.ndims == value.shape.ndims, (reward.shape, value.shape)
@@ -710,13 +1207,137 @@ def lambda_return(reward, value, pcont, bootstrap, lambda_, axis):
     #    lambda agg, cur0, cur1: cur0 + cur1 * lambda_ * agg,
     #    (inputs, pcont), bootstrap, reverse=True)
     # reimplement to optimize performance
+
+    # print("tn",next_values.detach().numpy())
+    # print("tv",value[1:].detach().numpy())
+    # print("tb",bootstrap[None].detach().numpy())
+    # exit()
     returns = static_scan_for_lambda_return(
         lambda agg, cur0, cur1: cur0 + cur1 * lambda_ * agg, (inputs, pcont), bootstrap
     )
     if axis != 0:
         returns = returns.permute(dims)
+
     return returns
 
+def unbind_dim_0(input:Tensor):
+    return tuple(input[i] for i in range(input.shape[0]))
+def t_static_scan_for_lambda_return(fn, inputs, start):
+    # print( inputs, start)
+    # print("in", inputs[0].numpy(), start.numpy())
+    # exit()
+    last = start
+    indices = range(inputs[0].shape[0])
+    indices = reversed(indices)
+    flag = True
+    for index in indices:
+        # (inputs, pcont) -> (inputs[index], pcont[index])
+        inp = lambda x: (_input[x] for _input in inputs)
+        last = fn(last, *inp(index))
+        if flag:
+            outputs = last
+            flag = False
+        else:
+            outputs = Tensor.cat(*[outputs, last], dim=-1)
+    outputs = Tensor.reshape(outputs, [outputs.shape[0], outputs.shape[1], 1])
+    outputs = Tensor.flip(outputs, [1])
+    outputs = unbind_dim_0(outputs)
+    return outputs
+
+def t_lambda_return(reward, value, pcont, bootstrap, lambda_, axis,true_value):
+    # print(value.numpy())
+    # "Check Value"
+    # exit()
+    # Setting lambda=1 gives a discounted Monte Carlo return.
+    # Setting lambda=0 gives a fixed 1-step return.
+    # assert reward.shape.ndims == value.shape.ndims, (reward.shape, value.shape)
+    assert len(reward.shape) == len(value.shape), (reward.shape, value.shape)
+    if isinstance(pcont, (int, float)):
+        pcont = pcont * Tensor.ones_like(reward)
+    dims = list(range(len(reward.shape)))
+    dims = [axis] + dims[1:axis] + [0] + dims[axis + 1 :]
+    if axis != 0:
+        reward = reward.permute(dims)
+        value = value.permute(dims)
+        pcont = pcont.permute(dims)
+    if bootstrap is None:
+        bootstrap = Tensor.zeros_like(value[-1])
+    # next_values = Tensor.cat(value[1:], bootstrap[None], dim=0)
+    #Hack for nan
+    next_values = true_value[1:]
+    inputs = reward + pcont * next_values * (1 - lambda_)
+    # returns = static_scan(
+    #    lambda agg, cur0, cur1: cur0 + cur1 * lambda_ * agg,
+    #    (inputs, pcont), bootstrap, reverse=True)
+    # reimplement to optimize performance
+    # print("r",reward.numpy())
+    # print("p",pcont.numpy())
+    # print("value",value[1:].shape)
+    # print("bootstrap",bootstrap[None].numpy())
+    # print("next_values",next_values.numpy())
+    # print("v",value[1:].numpy())
+    # print("b",bootstrap[None].numpy())
+    # print("l",lambda_)
+    # exit()
+    returns = t_static_scan_for_lambda_return(
+        lambda agg, cur0, cur1: cur0 + cur1 * lambda_ * agg, (inputs, pcont), bootstrap
+    )
+    if axis != 0:
+        returns = returns.permute(dims)
+    # print(returns[0].numpy())
+    # exit()
+    for i in returns:
+        i.requires_grad=False
+    return returns
+
+
+class t_Optimizer:
+    def __init__(
+        self,
+        name,
+        parameters,
+        lr,
+        eps=1e-4,
+        clip=None,
+        wd=None,
+        wd_pattern=r".*",
+        opt="adam",
+        use_amp=False,
+    ):
+        assert 0 <= wd < 1
+        assert not clip or 1 <= clip
+        self._name = name
+        self._parameters = parameters
+        self._clip = clip
+        self._wd = wd
+        self._wd_pattern = wd_pattern
+        self._opt=tnn.optim.Adam(list(parameters),lr=lr,eps=eps)
+        # self._opt = {
+        #     "adam": lambda: torch.optim.Adam(parameters, lr=lr, eps=eps),
+        #     "nadam": lambda: NotImplemented(f"{opt} is not implemented"),
+        #     "adamax": lambda: torch.optim.Adamax(parameters, lr=lr, eps=eps),
+        #     "sgd": lambda: torch.optim.SGD(parameters, lr=lr),
+        #     "momentum": lambda: torch.optim.SGD(parameters, lr=lr, momentum=0.9),
+        # }[opt]()
+        self._scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+
+    def __call__(self, loss, params, retain_graph=True):
+        assert len(loss.shape) == 0, loss.shape
+        metrics = {}
+        metrics[f"{self._name}_loss"] = loss.realize().cpu().numpy()
+        self._opt.zero_grad()
+        # self._scaler.scale(loss).backward(retain_graph=retain_graph)
+        # self._scaler.unscale_(self._opt)
+        loss.backward()
+        # norm = torch.nn.utils.clip_grad_norm_(params, self._clip)
+        # if self._wd:
+        #     self._apply_weight_decay(params)
+        # self._scaler.step(self._opt)
+        # self._scaler.update()
+        self._opt.step()
+        self._opt.zero_grad()
+        # metrics[f"{self._name}_grad_norm"] = norm.item()
+        return metrics
 
 class Optimizer:
     def __init__(
@@ -793,10 +1414,11 @@ def args_type(default):
     return lambda x: parse_string(x) if isinstance(x, str) else parse_object(x)
 
 
-def static_scan(fn, inputs, start):
+def static_scan(fn, inputs, start,test=False):
     last = start
     indices = range(inputs[0].shape[0])
     flag = True
+    outputs={}
     for index in indices:
         inp = lambda x: (_input[x] for _input in inputs)
         last = fn(last, *inp(index))
@@ -834,6 +1456,55 @@ def static_scan(fn, inputs, start):
                     else:
                         outputs[j] = torch.cat(
                             [outputs[j], last[j].unsqueeze(0)], dim=0
+                        )
+    if type(last) == type({}):
+        outputs = [outputs]
+    return outputs
+
+
+
+def t_static_scan(fn, inputs, start):
+    last = start
+    indices = range(inputs[0].shape[0])
+    flag = True
+    outputs={}
+    for index in indices:
+        inp = lambda x: (_input[x] for _input in inputs)
+        last = fn(last, *inp(index))
+        if flag:
+            if type(last) == type({}):
+                outputs = {
+                    key: Tensor(value.numpy()).unsqueeze(0) for key, value in last.items()
+                }
+            else:
+                outputs = []
+                for _last in last:
+                    if type(_last) == type({}):
+                        outputs.append(
+                            {
+                                key: Tensor(value.numpy()).unsqueeze(0)
+                                for key, value in _last.items()
+                            }
+                        )
+                    else:
+                        outputs.append(Tensor(_last.numpy()).unsqueeze(0))
+            flag = False
+        else:
+            if type(last) == type({}):
+                for key in last.keys():
+                    outputs[key] = Tensor.cat(
+                        *[outputs[key], last[key].unsqueeze(0)], dim=0
+                    )
+            else:
+                for j in range(len(outputs)):
+                    if type(last[j]) == type({}):
+                        for key in last[j].keys():
+                            outputs[j][key] = Tensor.cat(
+                                *[outputs[j][key], last[j][key].unsqueeze(0)], dim=0
+                            )
+                    else:
+                        outputs[j] = Tensor.cat(
+                            *[outputs[j], last[j].unsqueeze(0)], dim=0
                         )
     if type(last) == type({}):
         outputs = [outputs]
@@ -896,9 +1567,14 @@ def weight_init(m):
         denoms = (in_num + out_num) / 2.0
         scale = 1.0 / denoms
         std = np.sqrt(scale) / 0.87962566103423978
+        # print(m)
+        # print("torch",m.weight.data.detach().numpy())
+
         nn.init.trunc_normal_(
             m.weight.data, mean=0.0, std=std, a=-2.0 * std, b=2.0 * std
         )
+        # print("torch",m.weight.data.detach().numpy())
+        # exit()
         if hasattr(m.bias, "data"):
             m.bias.data.fill_(0.0)
     elif isinstance(m, nn.LayerNorm):

@@ -4,10 +4,10 @@ import os
 import pathlib
 import sys
 
-os.environ["MUJOCO_GL"] = "osmesa"
+# os.environ["MUJOCO_GL"] = "osmesa"
 
 import numpy as np
-import ruamel.yaml as yaml
+from ruamel.yaml import YAML
 
 sys.path.append(str(pathlib.Path(__file__).parent))
 
@@ -21,13 +21,16 @@ import torch
 from torch import nn
 from torch import distributions as torchd
 
-
+from tinygrad import Tensor
+from tinygrad.nn.state import safe_save, safe_load, get_state_dict, load_state_dict
 to_np = lambda x: x.detach().cpu().numpy()
+from tinygrad import Device
 
-
+Device.DEFAULT="GPU"
 class Dreamer(nn.Module):
     def __init__(self, obs_space, act_space, config, logger, dataset):
         super(Dreamer, self).__init__()
+        self.is_tinygrad=True
         self._config = config
         self._logger = logger
         self._should_log = tools.Every(config.log_every)
@@ -42,7 +45,9 @@ class Dreamer(nn.Module):
         self._update_count = 0
         self._dataset = dataset
         self._wm = models.WorldModel(obs_space, act_space, self._step, config)
+        self.t_wm = models.t_WorldModel(obs_space, act_space, self._step, config)
         self._task_behavior = models.ImagBehavior(config, self._wm)
+        self.t_task_behavior = models.t_ImagBehavior(config, self.t_wm)
         if (
             config.compile and os.name != "nt"
         ):  # compilation is not supported on windows
@@ -54,8 +59,48 @@ class Dreamer(nn.Module):
             random=lambda: expl.Random(config, act_space),
             plan2explore=lambda: expl.Plan2Explore(config, self._wm, reward),
         )[config.expl_behavior]().to(self._config.device)
+        self.t_expl_behavior = dict(
+            greedy=lambda: self.t_task_behavior,
+            random=lambda: expl.Random(config, act_space),
+            plan2explore=lambda: expl.Plan2Explore(config, self._wm, reward),
+        )["greedy"]()
 
+        # self.t_expl_behavior = self.t_task_behavior,
+ 
     def __call__(self, obs, reset, state=None, training=True):
+        if(self.is_tinygrad):
+            # print("Dreamer Called, training =",training)
+            # exit()
+            step = self._step
+            if training:
+                steps = (
+                    self._config.pretrain
+                    if self._should_pretrain()
+                    else self._should_train(step)
+                )
+                #CHANGE This
+                steps=2
+                for _ in range(steps):
+                    self.t_train(next(self._dataset))
+                    self._update_count += 1
+                    self._metrics["update_count"] = self._update_count
+                if self._should_log(step):
+                    for name, values in self._metrics.items():
+                        self._logger.scalar(name, float(np.mean(values)))
+                        self._metrics[name] = []
+                    if self._config.video_pred_log:
+                        openl = self.t_wm.video_pred(next(self._dataset))
+                        self._logger.video("train_openl", to_np(openl))
+                    self._logger.write(fps=True)
+
+            policy_output, state = self.t_policy(obs, state, training)
+            if training:
+                self._step += len(reset)
+                self._logger.step = self._config.action_repeat * self._step
+
+            return policy_output, state 
+        
+        #Will ony execute if tinygrad is false
         step = self._step
         if training:
             steps = (
@@ -63,6 +108,8 @@ class Dreamer(nn.Module):
                 if self._should_pretrain()
                 else self._should_train(step)
             )
+            #CHANGE This
+            # steps=250
             for _ in range(steps):
                 self._train(next(self._dataset))
                 self._update_count += 1
@@ -77,13 +124,58 @@ class Dreamer(nn.Module):
                 self._logger.write(fps=True)
 
         policy_output, state = self._policy(obs, state, training)
-
         if training:
             self._step += len(reset)
             self._logger.step = self._config.action_repeat * self._step
+
         return policy_output, state
 
+
+    def t_policy(self, obs, state, training):
+        # print(obs)
+        if state is None:
+            latent = action = None
+        else:
+            latent, action = state
+            # for k,v in latent.items():
+            #     print(k,v.numpy())
+        obs = self.t_wm.preprocess(obs)
+
+        embed = self.t_wm.encoder(obs)
+        latent, _ = self.t_wm.dynamics.obs_step(latent, action, embed, obs["is_first"])
+        # print(latent)
+        if self._config.eval_state_mean:
+            latent["stoch"] = latent["mean"]
+        feat = self.t_wm.dynamics.get_feat(latent)
+        if not training:
+            actor = self.t_task_behavior.actor(feat)
+            action = actor.mode()
+            # print("mode",actor.mode().numpy())
+        elif self._should_expl(self._step):
+            actor = self.t_expl_behavior.actor(feat)
+            action = actor.sample()
+        else:
+            actor = self.t_task_behavior.actor(feat)
+            action = actor.sample()
+        logprob = actor.log_prob(action)
+
+
+        latent = {k: v.detach() for k, v in latent.items()}
+        action = action.detach()
+        if self._config.actor["dist"] == "onehot_gumble":
+            action = tools.one_hot(
+                Tensor.argmax(action, axis=-1), self._config.num_actions
+            )
+        policy_output = {"action": action, "logprob": logprob}
+
+        # policy_output2 = {"action": action.numpy(), "logprob": logprob.numpy()}
+        # print(policy_output2)
+
+        state = (latent, action)
+        return policy_output, state
+    
     def _policy(self, obs, state, training):
+        # print("policy called")
         if state is None:
             latent = action = None
         else:
@@ -104,6 +196,8 @@ class Dreamer(nn.Module):
             actor = self._task_behavior.actor(feat)
             action = actor.sample()
         logprob = actor.log_prob(action)
+
+
         latent = {k: v.detach() for k, v in latent.items()}
         action = action.detach()
         if self._config.actor["dist"] == "onehot_gumble":
@@ -115,13 +209,16 @@ class Dreamer(nn.Module):
         return policy_output, state
 
     def _train(self, data):
+        print("TORCH (Dreamer._train)")
         metrics = {}
+        print("Torch Train WM")
         post, context, mets = self._wm._train(data)
         metrics.update(mets)
         start = post
         reward = lambda f, s, a: self._wm.heads["reward"](
             self._wm.dynamics.get_feat(s)
         ).mode()
+        print("Torch Train Agent")
         metrics.update(self._task_behavior._train(start, reward)[-1])
         if self._config.expl_behavior != "greedy":
             mets = self._expl_behavior.train(start, context, data)[-1]
@@ -131,6 +228,32 @@ class Dreamer(nn.Module):
                 self._metrics[name] = [value]
             else:
                 self._metrics[name].append(value)
+
+    def t_train(self, data):
+        metrics = {}
+        print("Tiny (Dreamer._train)")
+        print("Tiny WM")
+        post, context, mets = self.t_wm._train(data)
+        # metrics.update(mets)
+        # print(post)
+        # exit()
+        start = post
+        reward = lambda f, s, a: self.t_wm.heads["reward"](
+            self.t_wm.dynamics.get_feat(s)
+        ).mode()
+        print("Tiny Train Agent")
+        self.t_expl_behavior._train(start, reward)
+        if self._config.expl_behavior != "greedy":
+            self.t_expl_behavior.train(start, context, data)
+            # metrics.update({"expl_" + key: value for key, value in mets.items()})
+        # for name, value in metrics.items():
+        #     if not name in self._metrics.keys():
+        #         self._metrics[name] = [value]
+        #     else:
+        #         self._metrics[name].append(value)
+
+        
+
 
 
 def count_steps(folder):
@@ -204,6 +327,7 @@ def make_env(config, mode, id):
 
 
 def main(config):
+    is_tinygrad=True
     tools.set_seed_everywhere(config.seed)
     if config.deterministic_run:
         tools.enable_deterministic_run()
@@ -252,9 +376,14 @@ def main(config):
         prefill = max(0, config.prefill - count_steps(config.traindir))
         print(f"Prefill dataset ({prefill} steps).")
         if hasattr(acts, "discrete"):
-            random_actor = tools.OneHotDist(
-                torch.zeros(config.num_actions).repeat(config.envs, 1)
-            )
+            if is_tinygrad:
+                random_actor = tools.t_OneHotDist(
+                    Tensor.zeros(config.num_actions).repeat([config.envs, 1])
+                )
+            else:
+                random_actor = tools.OneHotDist(
+                    torch.zeros(config.num_actions).repeat(config.envs, 1)
+                )
         else:
             random_actor = torchd.independent.Independent(
                 torchd.uniform.Uniform(
@@ -265,7 +394,7 @@ def main(config):
             )
 
         def random_agent(o, d, s):
-            action = random_actor.sample()
+            action = random_actor.rand_sample()
             logprob = random_actor.log_prob(action)
             return {"action": action, "logprob": logprob}, None
 
@@ -282,6 +411,7 @@ def main(config):
         print(f"Logger: ({logger.step} steps).")
 
     print("Simulate agent.")
+    
     train_dataset = make_dataset(train_eps, config)
     eval_dataset = make_dataset(eval_eps, config)
     agent = Dreamer(
@@ -292,7 +422,13 @@ def main(config):
         train_dataset,
     ).to(config.device)
     agent.requires_grad_(requires_grad=False)
-    if (logdir / "latest.pt").exists():
+    if (logdir / "model.safetensors").exists() and agent.is_tinygrad:
+        print("Loading previous checkpoint (tinygrad)")
+        state_dict = safe_load(logdir / "model.safetensors")
+        load_state_dict(agent, state_dict)
+        agent._should_pretrain._once = False
+    elif (logdir / "latest.pt").exists() and not agent.is_tinygrad:
+        print("Loading previous checkpoint (torch)")
         checkpoint = torch.load(logdir / "latest.pt")
         agent.load_state_dict(checkpoint["agent_state_dict"])
         tools.recursively_load_optim_state_dict(agent, checkpoint["optims_state_dict"])
@@ -301,6 +437,9 @@ def main(config):
     # make sure eval will be executed once after config.steps
     while agent._step < config.steps + config.eval_every:
         logger.write()
+        print("Step : ",agent._step )
+
+        print("skip eval")
         if config.eval_episode_num > 0:
             print("Start evaluation.")
             eval_policy = functools.partial(agent, training=False)
@@ -313,9 +452,16 @@ def main(config):
                 is_eval=True,
                 episodes=config.eval_episode_num,
             )
+            print("eval done")
+
+            print("Start Video pred.")
             if config.video_pred_log:
-                video_pred = agent._wm.video_pred(next(eval_dataset))
-                logger.video("eval_openl", to_np(video_pred))
+                if agent.is_tinygrad:
+                    video_pred = agent.t_wm.video_pred(next(eval_dataset))
+                    logger.video("eval_openl", to_np(video_pred))
+                else:
+                    video_pred = agent._wm.video_pred(next(eval_dataset))
+                    logger.video("eval_openl", to_np(video_pred))
         print("Start training.")
         state = tools.simulate(
             agent,
@@ -327,11 +473,16 @@ def main(config):
             steps=config.eval_every,
             state=state,
         )
-        items_to_save = {
-            "agent_state_dict": agent.state_dict(),
-            "optims_state_dict": tools.recursively_collect_optim_state_dict(agent),
-        }
-        torch.save(items_to_save, logdir / "latest.pt")
+        print("Saved Checkpoint")
+        if agent.is_tinygrad:
+            state_dict = get_state_dict(agent)
+            safe_save(state_dict,logdir / "model.safetensors")
+        else:
+            items_to_save = {
+                "agent_state_dict": agent.state_dict(),
+                "optims_state_dict": tools.recursively_collect_optim_state_dict(agent),
+            }
+            torch.save(items_to_save, logdir / "latest.pt")
     for env in train_envs + eval_envs:
         try:
             env.close()
@@ -343,7 +494,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--configs", nargs="+")
     args, remaining = parser.parse_known_args()
-    configs = yaml.safe_load(
+    yaml = YAML(typ='rt')
+    configs = yaml.load(
         (pathlib.Path(sys.argv[0]).parent / "configs.yaml").read_text()
     )
 

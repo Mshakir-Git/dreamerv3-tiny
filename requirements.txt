@@ -15,7 +15,7 @@ memory_maze==1.0.3
 atari-py==0.2.9
 crafter==1.8.0
 opencv-python==4.7.0.72
-numpy==1.21.0
+numpy
 tensorboard
 # minerl==0.4.4
 # This was needed for minerl
