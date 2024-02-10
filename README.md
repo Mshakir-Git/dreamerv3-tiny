@@ -1,4 +1,48 @@
-# dreamerv3-torch
+# tiny-dreamerv3
+
+What is Working
+1: World Model/Actor/Crtic forward/Backward pass (Slow)(Can be buggy)
+2: Video Prediction (Tensorboard)
+
+Needs to be Added
+1: TinyJit
+
+
+## Instructions
+
+### Method 1: Manual
+
+Get dependencies with python 3.9:
+```
+pip install -r requirements.txt
+```
+(Try diifferent version of gym if gym fails)
+
+
+## ROMs
+
+In order to import ROMS, you need to download `Roms.rar` from the [Atari 2600 VCS ROM Collection](http://www.atarimania.com/rom_collection_archive_atari_2600_roms.html) and extract the `.rar` file.  Once you've done that, run:
+
+`python -m atari_py.import_roms <path to folder>`
+
+This should print out the names of ROMs as it imports them.  The ROMs will be copied to your `atari_py` installation directory.
+
+## Pong
+
+```
+python dreamer.py --configs atari100k --task atari_pong --logdir ./logdir/pong  
+```
+
+## Check Results
+
+```
+tensorboard --logdir ./logdir/pong 
+```
+
+
+# OLD Readme
+
+## dreamerv3-torch
 Pytorch implementation of [Mastering Diverse Domains through World Models](https://arxiv.org/abs/2301.04104v1). DreamerV3 is a scalable algorithm that outperforms previous approaches across various domains with fixed hyperparameters.
 
 ## Instructions

@@ -20,8 +20,7 @@ class RewardEMA:
 
     def __call__(self, x, ema_vals):
         flat_x = Tensor.flatten(x.detach())
-        # print(self.range.numpy(),x.numpy())
-        # exit()
+
         #TEMP
         # x_quantile = torch.quantile(input=flat_x, q=self.range)
         x_quantile = Tensor(np.quantile(a=flat_x.numpy(), q=self.range.numpy()),dtype=dtypes.float)
@@ -35,7 +34,6 @@ class RewardEMA:
 
 class WorldModel:
     def __init__(self, obs_space, act_space, step, config):
-        # super(WorldModel, self).__init__()
         self._step = step
         self._use_amp = True if config.precision == 16 else False
         self._config = config
@@ -59,53 +57,7 @@ class WorldModel:
             self.embed_size,
             config.device,
         )
-        # print(self.dynamics)
-        # print(self.t_dynamics)
-        # exit()
-        # self.heads = nn.ModuleDict()
-        # if config.dyn_discrete:
-        #     feat_size = config.dyn_stoch * config.dyn_discrete + config.dyn_deter
-        # else:
-        #     feat_size = config.dyn_stoch + config.dyn_deter
-        # self.heads["decoder"] = networks.MultiDecoder(
-        #     feat_size, shapes, **config.decoder
-        # )
-        # self.heads["reward"] = networks.MLP(
-        #     feat_size,
-        #     (255,) if config.reward_head["dist"] == "symlog_disc" else (),
-        #     config.reward_head["layers"],
-        #     config.units,
-        #     config.act,
-        #     config.norm,
-        #     dist=config.reward_head["dist"],
-        #     outscale=config.reward_head["outscale"],
-        #     device=config.device,
-        #     name="Reward",
-        # )
-        # self.heads["cont"] = networks.MLP(
-        #     feat_size,
-        #     (),
-        #     config.cont_head["layers"],
-        #     config.units,
-        #     config.act,
-        #     config.norm,
-        #     dist="binary",
-        #     outscale=config.cont_head["outscale"],
-        #     device=config.device,
-        #     name="Cont",
-        # )
-        # for name in config.grad_heads:
-        #     assert name in self.heads, name
-        # self._model_opt = tools.Optimizer(
-        #     "model",
-        #     self.parameters(),
-        #     config.model_lr,
-        #     config.opt_eps,
-        #     config.grad_clip,
-        #     config.weight_decay,
-        #     opt=config.opt,
-        #     use_amp=self._use_amp,
-        # )
+      
         self.heads = {}
         if config.dyn_discrete:
             feat_size = config.dyn_stoch * config.dyn_discrete + config.dyn_deter
@@ -140,9 +92,7 @@ class WorldModel:
         )
         for name in config.grad_heads:
             assert name in self.heads, name
-        # print(list(self.parameters()))
-        # print(list(tnn.state.get_parameters(self)))
-        # exit()
+
         # self.t_model_opt = tools.t_Optimizer(
         #     "model",
         #     tnn.state.get_parameters(self),
@@ -188,11 +138,6 @@ class WorldModel:
             post, prior = self.dynamics.observe(
                 embed, data["action"], data["is_first"]
             )
-            # print("tiny prior",prior)
-            # # print("tiny post",post)
-            # for k,v in post.items():
-            #     print(k,v)
-            #     print(v.numpy())
 
             kl_free = self._config.kl_free
             dyn_scale = self._config.dyn_scale
@@ -200,8 +145,6 @@ class WorldModel:
             kl_loss, kl_value, dyn_loss, rep_loss = self.dynamics.kl_loss(
                 post, prior, kl_free, dyn_scale, rep_scale
             )
-            print("kl_loss shape",kl_loss.shape)
-            print("embed.shape[:2]",embed.shape[:2])
 
             assert kl_loss.shape == embed.shape[:2], kl_loss.shape
             
@@ -218,84 +161,24 @@ class WorldModel:
             losses = {}
             for name, pred in preds.items():
                 loss = -pred.log_prob(data[name])
-                if(loss.dtype!=dtypes.float):
-                    print(pred)
-                    print(loss.dtype)
-                    exit()
                 assert loss.shape == embed.shape[:2], (name, loss.shape)
                 losses[name] = loss
             scaled = {
                 key: value * self._scales.get(key, 1.0)
                 for key, value in losses.items()
             }
-            # print(losses,scaled)
-            print(sum(losses.values()).dtype)
             model_loss = sum(scaled.values()) + kl_loss
-            # print(model_loss.numpy())
-            # print(Tensor.mean(model_loss).numpy(),len(tnn.state.get_parameters(self)))
-            # for k,p in tnn.state.get_state_dict(self).items():
-            #     print(k,p.dtype)
-            #     if(isinstance(p.lazydata, MultiLazyBuffer)):
-            #         print("multi")
-            #     print(p.lazydata)
-            # exit()
             #custom backward
             m_loss=Tensor.mean(model_loss)
             assert len(m_loss.shape) == 0, m_loss.shape
             my_metrics["my_loss"] = m_loss.numpy()
-            print("LOSSSSSSSSSSSSSSS",my_metrics["my_loss"],model_loss.dtype)
+            print("World model Loss",my_metrics["my_loss"],model_loss.dtype)
             opt.zero_grad()
             m_loss.backward()
             opt.step()
             opt.zero_grad()
             # metrics = self.t_model_opt(Tensor.mean(model_loss), tnn.state.get_parameters(self))
-            # exit()
-        # with tools.RequiresGrad(self):
-        #     with torch.cuda.amp.autocast(self._use_amp):
-        #         embed = self.encoder(data)
-        #         post, prior = self.dynamics.observe(
-        #             embed, data["action"], data["is_first"]
-        #         )
-        #         # print("torch prior",prior)
-        #         # print("torch post",post)
-        #         kl_free = self._config.kl_free
-        #         dyn_scale = self._config.dyn_scale
-        #         rep_scale = self._config.rep_scale
-        #         kl_loss, kl_value, dyn_loss, rep_loss = self.dynamics.kl_loss(
-        #             post, prior, kl_free, dyn_scale, rep_scale
-        #         )
-        #         assert kl_loss.shape == embed.shape[:2], kl_loss.shape
-        #         preds = {}
-        #         for name, head in self.heads.items():
-        #             grad_head = name in self._config.grad_heads
-        #             feat = self.dynamics.get_feat(post)
-        #             feat = feat if grad_head else feat.detach()
-        #             pred = head(feat)
-        #             if type(pred) is dict:
-        #                 preds.update(pred)
-        #             else:
-        #                 preds[name] = pred
-        #         losses = {}
-        #         for name, pred in preds.items():
-        #             loss = -pred.log_prob(data[name])
-        #             assert loss.shape == embed.shape[:2], (name, loss.shape)
-        #             losses[name] = loss
-        #         scaled = {
-        #             key: value * self._scales.get(key, 1.0)
-        #             for key, value in losses.items()
-        #         }
-        #         model_loss = sum(scaled.values()) + kl_loss
-
-        #         # print("*********torch**********")
-        #         # for k,p in self.state_dict().items():
-        #         #     print(k,p.shape[0])
-                
-        #         # print(torch.mean(model_loss),[k for k,v in self.state_dict().items()], [len(p) for p in self.parameters()])
-        #         # print(model_loss.detach().numpy())
-        #         # exit()
-        #     metrics = self._model_opt(torch.mean(model_loss), self.parameters())
-        #     print("TOOOOOOORCHHH",torch.mean(model_loss).detach().cpu().numpy())
-
+      
 
         # metrics.update({f"{name}_loss": to_np(loss) for name, loss in losses.items()})
         # metrics["kl_free"] = kl_free
@@ -320,22 +203,7 @@ class WorldModel:
         post = {k: v.detach() for k, v in post.items()}
         return post, context, {"my_loss":my_metrics["my_loss"]}
 
-    # this function is called during both rollout and training
-    # def preprocess(self, obs):
-    #     obs = obs.copy()
-    #     obs["image"] = torch.Tensor(obs["image"]) / 255.0
-    #     if "discount" in obs:
-    #         obs["discount"] *= self._config.discount
-    #         # (batch_size, batch_length) -> (batch_size, batch_length, 1)
-    #         obs["discount"] = torch.Tensor(obs["discount"]).unsqueeze(-1)
-    #     # 'is_first' is necesarry to initialize hidden state at training
-    #     assert "is_first" in obs
-    #     # 'is_terminal' is necesarry to train cont_head
-    #     assert "is_terminal" in obs
-    #     obs["cont"] = torch.Tensor(1.0 - obs["is_terminal"]).unsqueeze(-1)
-    #     obs = {k: torch.Tensor(v).to("cpu") for k, v in obs.items()}
-    #     return obs
-    
+    # this function is called during both rollout and training 
     def preprocess(self, obs):
         obs = obs.copy()
         obs["image"] = Tensor(obs["image"]) / 255.0
@@ -354,10 +222,6 @@ class WorldModel:
     def video_pred(self, data):
         data = self.preprocess(data)
         embed = self.encoder(data)
-        # print(data)
-        # print(data["action"])
-        # print(data["action"][:6, 5:])
-        # exit()
         states, _ = self.dynamics.observe(
             embed[:6, :5], data["action"][:6, :5], data["is_first"][:6, :5]
         )
@@ -485,12 +349,10 @@ class ImagBehavior:
 
             state_ent = self._world_model.dynamics.get_dist(imag_state).entropy()
             # this target is not scaled by ema or sym_log.
-            # print(target)
             target, weights, base = self._compute_target(
                 imag_feat, imag_state, reward
             )
-            # print(target[0].numpy())
-            # exit()
+
             actor_loss, mets = self._compute_actor_loss(
                 imag_feat,
                 imag_action,
@@ -522,10 +384,11 @@ class ImagBehavior:
             # (time, batch, 1), (time, batch, 1) -> (1,)
             value_loss = Tensor.mean(weights[:-1] * value_loss[:, :, None])
             print("value_loss",value_loss.numpy())
+            metrics.update(tools.tensorstats(reward, "imag_reward"))
+
             # exit()
         # metrics.update(tools.tensorstats(value.mode(), "value"))
         # metrics.update(tools.tensorstats(target, "target"))
-        # metrics.update(tools.tensorstats(reward, "imag_reward"))
         # if self._config.actor["dist"] in ["onehot"]:
         #     metrics.update(
         #         tools.tensorstats(
@@ -558,20 +421,18 @@ class ImagBehavior:
         flatten = lambda x: x.reshape([-1] + list(x.shape[2:]))
         start = {k: flatten(v) for k, v in start.items()}
 
-        # print(start)
-        # exit()
+
 
         def step(prev, _):
             state, _, _ = prev
-            # print(state)
-            # exit()
+
             feat = dynamics.get_feat(state)
             inp = feat.detach()
             action = policy(inp).sample()
             succ = dynamics.img_step(state, action)
             return succ, feat, action
 
-        succ, feats, actions = tools.t_static_scan(
+        succ, feats, actions = tools.static_scan(
             step, [Tensor.arange(horizon)], (start, None, None)
         )
         states = {k: Tensor.cat(*[start[k][None], v[:-1]], dim=0) for k, v in succ.items()}
@@ -581,17 +442,13 @@ class ImagBehavior:
     def _compute_target(self, imag_feat, imag_state, reward):
         if "cont" in self._world_model.heads:
             inp = self._world_model.dynamics.get_feat(imag_state)
-            # print(self._world_model.heads["cont"](inp).mean)
-            # exit()
+
             discount = self._config.discount * self._world_model.heads["cont"](inp).mean
         else:
             discount = self._config.discount * Tensor.ones_like(reward)
         
         value = self.value(imag_feat).mode()
-        # print(value.numpy())
-        # exit()
-        #here
-        target = tools.t_lambda_return(
+        target = tools.lambda_return(
             reward[1:],
             value[:-1],
             discount[1:],
@@ -600,12 +457,9 @@ class ImagBehavior:
             axis=0,
             true_value=value
         )
-        # print(target[0].numpy())
         weights = cumprod_dim_0(
             Tensor.cat(*[Tensor.ones_like(discount[:1]), discount[:-1]], dim=0)
         ).cast(dtypes.float).detach()
-        # print("w",weights.numpy())
-        # exit()
         return target, weights, value[:-1]
 
     def _compute_actor_loss(
@@ -620,8 +474,6 @@ class ImagBehavior:
         inp = imag_feat.detach()
         policy = self.actor(inp)
         # Q-val for actor is not transformed using symlog
-        # print(target[0].numpy())
-        # exit()
         target = Tensor.stack(target, dim=1)
         # Reward ema
         if self._config.reward_EMA and hasattr(self,"reward_ema"):

@@ -22,16 +22,12 @@ from tinygrad import Tensor,dtypes , nn as tnn
 to_np = lambda x: x.detach().cpu().numpy()
 
 
-def symlog(x):
-    return torch.sign(x) * torch.log(torch.abs(x) + 1.0)
 
-def t_symlog(x):
+def symlog(x):
     return Tensor.sign(x) * Tensor.log(Tensor.abs(x) + 1.0)
 
-def symexp(x):
-    return torch.sign(x) * (torch.exp(torch.abs(x)) - 1.0)
 
-def t_symexp(x):
+def symexp(x):
     return Tensor.sign(x) * (Tensor.exp(Tensor.abs(x)) - 1.0)
 
 class RequiresGrad:
@@ -432,42 +428,6 @@ class SampleDist:
         return -torch.mean(logprob, 0)
 
 
-class OneHotDist(torchd.one_hot_categorical.OneHotCategorical):
-    def __init__(self, logits=None, probs=None, unimix_ratio=0.0):
-        if logits is not None and unimix_ratio > 0.0:
-            probs = F.softmax(logits, dim=-1)
-            probs = probs * (1.0 - unimix_ratio) + unimix_ratio / probs.shape[-1]
-            logits = torch.log(probs)
-            super().__init__(logits=logits, probs=None)
-        else:
-            super().__init__(logits=logits, probs=probs)
-
-    def mode(self):
-
-        _mode = F.one_hot(
-            torch.argmax(super().logits, axis=-1), super().logits.shape[-1]
-        )
-        # print("***** mode ")
-        # print(torch.argmax(super().logits, axis=-1).shape)
-        # print(_mode.shape)
-        # exit()
-        return _mode.detach() + super().logits - super().logits.detach()
-
-    def sample(self, sample_shape=(), seed=None):
-        if seed is not None:
-            raise ValueError("need to check")
-        sample = super().sample(sample_shape)
-        probs = super().probs
-        while len(probs.shape) < len(sample.shape):
-            probs = probs[None]
-        sample += probs - probs.detach()
-        return sample
-    
-    # def log_prob(self,value):
-    #     ret=super().log_prob(value)
-    #     print(self.probs,ret)
-    #     exit()
-    #     return ret
 
 def logsumexp(x, axis=None,dim=1,keepdim=True):
     """Compute the log of the sum of exponentials of input elements."""
@@ -568,7 +528,7 @@ def one_hot(cat,classes):
     return Tensor(ret,dtype=dtypes.float)
      
 GLOBAL_COUNT=0
-class t_OneHotDist(OneHotCategoricalDistribution):
+class OneHotDist(OneHotCategoricalDistribution):
     def __init__(self, logits=None, probs=None, unimix_ratio=0.0):
         ##CHECK NORMALISATION (torch categorical)
         if logits is not None and unimix_ratio > 0.0:
@@ -634,14 +594,14 @@ class t_OneHotDist(OneHotCategoricalDistribution):
         return log_pmf.gather(value,-1).squeeze(-1)
 
 
-class t_DiscDist:
+class DiscDist:
     def __init__(
         self,
         logits,
         low=-20.0,
         high=20.0,
-        transfwd=t_symlog,
-        transbwd=t_symexp,
+        transfwd=symlog,
+        transbwd=symexp,
         device="gpu",
     ):
         self.logits = logits
@@ -728,68 +688,6 @@ class t_DiscDist:
 
 
 
-class DiscDist:
-    def __init__(
-        self,
-        logits,
-        low=-20.0,
-        high=20.0,
-        transfwd=symlog,
-        transbwd=symexp,
-        device="cuda",
-    ):
-        self.logits = logits
-        self.probs = torch.softmax(logits, -1)
-        self.buckets = torch.linspace(low, high, steps=255).to(device)
-        self.width = (self.buckets[-1] - self.buckets[0]) / 255
-        self.transfwd = transfwd
-        self.transbwd = transbwd
-
-    def mean(self):
-        _mean = self.probs * self.buckets
-        return self.transbwd(torch.sum(_mean, dim=-1, keepdim=True))
-
-    def mode(self):
-        _mode = self.probs * self.buckets
-        ret= self.transbwd(torch.sum(_mode, dim=-1, keepdim=True))
-        # print(torch.sum(_mode, dim=-1, keepdim=True).detach().numpy())
-        # exit()
-        return ret
-
-    # Inside OneHotCategorical, log_prob is calculated using only max element in targets
-    def log_prob(self, x):
-        x = self.transfwd(x)
-        # x(time, batch, 1)
-        below = torch.sum((self.buckets <= x[..., None]).to(torch.int32), dim=-1) - 1
-        above = len(self.buckets) - torch.sum(
-            (self.buckets > x[..., None]).to(torch.int32), dim=-1
-        )
-        # this is implemented using clip at the original repo as the gradients are not backpropagated for the out of limits.
-        below = torch.clip(below, 0, len(self.buckets) - 1)
-        above = torch.clip(above, 0, len(self.buckets) - 1)
-        equal = below == above
-
-        dist_to_below = torch.where(equal, 1, torch.abs(self.buckets[below] - x))
-        dist_to_above = torch.where(equal, 1, torch.abs(self.buckets[above] - x))
-
-
-        total = dist_to_below + dist_to_above
-        weight_below = dist_to_above / total
-        weight_above = dist_to_below / total
-        # print("torch onehot inputs",below.shape, len(self.buckets))
-        target = (
-            F.one_hot(below, num_classes=len(self.buckets)) * weight_below[..., None]
-            + F.one_hot(above, num_classes=len(self.buckets)) * weight_above[..., None]
-        )
-        log_pred = self.logits - torch.logsumexp(self.logits, -1, keepdim=True)
-        target = target.squeeze(-2)
-
-        return (target * log_pred).sum(-1)
-
-    def log_prob_target(self, target):
-        log_pred = super().logits - torch.logsumexp(super().logits, -1, keepdim=True)
-        return (target * log_pred).sum(-1)
-
 
 class MSEDist:
     def __init__(self, mode, agg="sum"):
@@ -819,36 +717,12 @@ class MSEDist:
 import math
 from numbers import Real
 def _sum_rightmost(value, dim):
-    r"""
-    Sum out ``dim`` many rightmost dimensions of a given tensor.
-
-    Args:
-        value (Tensor): A tensor of ``.dim()`` at least ``dim``.
-        dim (int): The number of rightmost dims to sum out.
-    """
     if dim == 0:
         return value
     required_shape = value.shape[:-dim] + (-1,)
     return value.reshape(required_shape).sum(-1)
 
-class t_Normal:
-    r"""
-    Creates a normal (also called Gaussian) distribution parameterized by
-    :attr:`loc` and :attr:`scale`.
-
-    Example::
-
-        >>> # xdoctest: +IGNORE_WANT("non-deterinistic")
-        >>> m = Normal(torch.tensor([0.0]), torch.tensor([1.0]))
-        >>> m.sample()  # normally distributed with loc=0 and scale=1
-        tensor([ 0.1046])
-
-    Args:
-        loc (float or Tensor): mean of the distribution (often referred to as mu)
-        scale (float or Tensor): standard deviation of the distribution
-            (often referred to as sigma)
-    """
-
+class Normal:
     def __init__(self, shape,mean, std):
             self._mean=mean
             self.std=std
@@ -862,34 +736,9 @@ class t_Normal:
     def mode(self):
         return self._mean
 
-    # @property
-    # def stddev(self):
-    #     return self.std
-
-    # @property
-    # def variance(self):
-    #     return self.stddev.pow(2)
-
-
-
-    # def expand(self, batch_shape, _instance=None):
-    #     new = self._get_checked_instance(Normal, _instance)
-    #     batch_shape = torch.Size(batch_shape)
-    #     new.loc = self.loc.expand(batch_shape)
-    #     new.scale = self.scale.expand(batch_shape)
-    #     super(Normal, new).__init__(batch_shape, validate_args=False)
-    #     new._validate_args = self._validate_args
-    #     return new
-
     def sample(self):
-        # shape = self._extended_shape(sample_shape)
-        # with torch.no_grad():
         return Tensor.normal(*self._shape,mean=self._mean, std=self.std)
 
-    # def rsample(self, sample_shape=torch.Size()):
-    #     shape = self._extended_shape(sample_shape)
-    #     eps = _standard_normal(shape, dtype=self.loc.dtype, device=self.loc.device)
-    #     return self.loc + eps * self.scale
         
     def entropy(self):
         ret = 0.5 + 0.5 * math.log(2 * math.pi) + Tensor.log(self.std)
@@ -908,23 +757,6 @@ class t_Normal:
             - math.log(math.sqrt(2 * math.pi))
         )
 
-    # def cdf(self, value):
-    #     if self._validate_args:
-    #         self._validate_sample(value)
-    #     return 0.5 * (
-    #         1 + torch.erf((value - self.loc) * self.scale.reciprocal() / math.sqrt(2))
-    #     )
-
-    # def icdf(self, value):
-    #     return self.loc + self.scale * torch.erfinv(2 * value - 1) * math.sqrt(2)
-
-
-    # @property
-    # def _natural_params(self):
-    #     return (self.loc / self.scale.pow(2), -0.5 * self.scale.pow(2).reciprocal())
-
-    # def _log_normalizer(self, x, y):
-    #     return -0.25 * x.pow(2) / y + 0.5 * torch.log(-math.pi / y)
 
 
 class SymlogDist:
@@ -988,34 +820,7 @@ class ContDist:
         return self._dist.log_prob(x)
 
 
-class Bernoulli:
-    def __init__(self, dist=None):
-        super().__init__()
-        self._dist = dist
-        self.mean = dist.mean
-
-    def __getattr__(self, name):
-        return getattr(self._dist, name)
-
-    def entropy(self):
-        return self._dist.entropy()
-
-    def mode(self):
-        _mode = torch.round(self._dist.mean)
-        return _mode.detach() + self._dist.mean - self._dist.mean.detach()
-
-    def sample(self, sample_shape=()):
-        return self._dist.rsample(sample_shape)
-
-    def log_prob(self, x):
-        _logits = self._dist.base_dist.logits
-        log_probs0 = -F.softplus(_logits)
-        log_probs1 = -F.softplus(-_logits)
-
-        return torch.sum(log_probs0 * (1 - x) + log_probs1 * x, -1)
-    
-
-class t_Bernoulli_dist:
+class Bernoulli_dist:
 
     def __init__(self,logits):
         self.logits=logits
@@ -1030,27 +835,17 @@ class t_Bernoulli_dist:
         return self.probs * (1 - self.probs)
 
     def sample(self, sample_shape=torch.Size()):
-        pd=self.probs.expand(sample_shape)
-        print("b sample",pd)
-        exit()
-        return torch.bernoulli()
+        raise NotImplementedError
 
     def log_prob(self, value):
-        if self._validate_args:
-            self._validate_sample(value)
-        logits, value = broadcast_all(self.logits, value)
-        return -binary_cross_entropy_with_logits(logits, value, reduction="none")
+        raise NotImplementedError
 
-    def entropy(self):
-        return binary_cross_entropy_with_logits(
-            self.logits, self.probs, reduction="none"
-        )
     
 
 
-class t_Bernoulli:
+class Bernoulli:
     def __init__(self,logits):
-        dist=t_Bernoulli_dist(logits)
+        dist=Bernoulli_dist(logits)
         self._dist = dist
         self.mean = dist.mean
 
@@ -1127,65 +922,10 @@ class TanhBijector(torchd.Transform):
         return 2.0 * (log2 - x - torch.softplus(-2.0 * x))
 
 
-def static_scan_for_lambda_return(fn, inputs, start):
-    last = start
-    indices = range(inputs[0].shape[0])
-    indices = reversed(indices)
-    flag = True
-    for index in indices:
-        # (inputs, pcont) -> (inputs[index], pcont[index])
-        inp = lambda x: (_input[x] for _input in inputs)
-        last = fn(last, *inp(index))
-        if flag:
-            outputs = last
-            flag = False
-        else:
-            outputs = torch.cat([outputs, last], dim=-1)
-    outputs = torch.reshape(outputs, [outputs.shape[0], outputs.shape[1], 1])
-    outputs = torch.flip(outputs, [1])
-    outputs = torch.unbind(outputs, dim=0)
-    return outputs
-
-
-def lambda_return(reward, value, pcont, bootstrap, lambda_, axis):
-    # print(value.detach().numpy())
-    # exit()
-    # Setting lambda=1 gives a discounted Monte Carlo return.
-    # Setting lambda=0 gives a fixed 1-step return.
-    # assert reward.shape.ndims == value.shape.ndims, (reward.shape, value.shape)
-    assert len(reward.shape) == len(value.shape), (reward.shape, value.shape)
-    if isinstance(pcont, (int, float)):
-        pcont = pcont * torch.ones_like(reward)
-    dims = list(range(len(reward.shape)))
-    dims = [axis] + dims[1:axis] + [0] + dims[axis + 1 :]
-    if axis != 0:
-        reward = reward.permute(dims)
-        value = value.permute(dims)
-        pcont = pcont.permute(dims)
-    if bootstrap is None:
-        bootstrap = torch.zeros_like(value[-1])
-    next_values = torch.cat([value[1:], bootstrap[None]], 0)
-    inputs = reward + pcont * next_values * (1 - lambda_)
-    # returns = static_scan(
-    #    lambda agg, cur0, cur1: cur0 + cur1 * lambda_ * agg,
-    #    (inputs, pcont), bootstrap, reverse=True)
-    # reimplement to optimize performance
-
-    # print("tn",next_values.detach().numpy())
-    # print("tv",value[1:].detach().numpy())
-    # print("tb",bootstrap[None].detach().numpy())
-    # exit()
-    returns = static_scan_for_lambda_return(
-        lambda agg, cur0, cur1: cur0 + cur1 * lambda_ * agg, (inputs, pcont), bootstrap
-    )
-    if axis != 0:
-        returns = returns.permute(dims)
-
-    return returns
 
 def unbind_dim_0(input:Tensor):
     return tuple(input[i] for i in range(input.shape[0]))
-def t_static_scan_for_lambda_return(fn, inputs, start):
+def static_scan_for_lambda_return(fn, inputs, start):
     # print( inputs, start)
     # print("in", inputs[0].numpy(), start.numpy())
     # exit()
@@ -1207,10 +947,7 @@ def t_static_scan_for_lambda_return(fn, inputs, start):
     outputs = unbind_dim_0(outputs)
     return outputs
 
-def t_lambda_return(reward, value, pcont, bootstrap, lambda_, axis,true_value):
-    # print(value.numpy())
-    # "Check Value"
-    # exit()
+def lambda_return(reward, value, pcont, bootstrap, lambda_, axis,true_value):
     # Setting lambda=1 gives a discounted Monte Carlo return.
     # Setting lambda=0 gives a fixed 1-step return.
     # assert reward.shape.ndims == value.shape.ndims, (reward.shape, value.shape)
@@ -1233,28 +970,18 @@ def t_lambda_return(reward, value, pcont, bootstrap, lambda_, axis,true_value):
     #    lambda agg, cur0, cur1: cur0 + cur1 * lambda_ * agg,
     #    (inputs, pcont), bootstrap, reverse=True)
     # reimplement to optimize performance
-    # print("r",reward.numpy())
-    # print("p",pcont.numpy())
-    # print("value",value[1:].shape)
-    # print("bootstrap",bootstrap[None].numpy())
-    # print("next_values",next_values.numpy())
-    # print("v",value[1:].numpy())
-    # print("b",bootstrap[None].numpy())
-    # print("l",lambda_)
-    # exit()
-    returns = t_static_scan_for_lambda_return(
+    returns = static_scan_for_lambda_return(
         lambda agg, cur0, cur1: cur0 + cur1 * lambda_ * agg, (inputs, pcont), bootstrap
     )
     if axis != 0:
         returns = returns.permute(dims)
-    # print(returns[0].numpy())
-    # exit()
     for i in returns:
         i.requires_grad=False
     return returns
 
 
 class t_Optimizer:
+    #NOT USED
     def __init__(
         self,
         name,
@@ -1377,56 +1104,8 @@ def args_type(default):
     return lambda x: parse_string(x) if isinstance(x, str) else parse_object(x)
 
 
-def static_scan(fn, inputs, start,test=False):
-    last = start
-    indices = range(inputs[0].shape[0])
-    flag = True
-    outputs={}
-    for index in indices:
-        inp = lambda x: (_input[x] for _input in inputs)
-        last = fn(last, *inp(index))
-        if flag:
-            if type(last) == type({}):
-                outputs = {
-                    key: value.clone().unsqueeze(0) for key, value in last.items()
-                }
-            else:
-                outputs = []
-                for _last in last:
-                    if type(_last) == type({}):
-                        outputs.append(
-                            {
-                                key: value.clone().unsqueeze(0)
-                                for key, value in _last.items()
-                            }
-                        )
-                    else:
-                        outputs.append(_last.clone().unsqueeze(0))
-            flag = False
-        else:
-            if type(last) == type({}):
-                for key in last.keys():
-                    outputs[key] = torch.cat(
-                        [outputs[key], last[key].unsqueeze(0)], dim=0
-                    )
-            else:
-                for j in range(len(outputs)):
-                    if type(last[j]) == type({}):
-                        for key in last[j].keys():
-                            outputs[j][key] = torch.cat(
-                                [outputs[j][key], last[j][key].unsqueeze(0)], dim=0
-                            )
-                    else:
-                        outputs[j] = torch.cat(
-                            [outputs[j], last[j].unsqueeze(0)], dim=0
-                        )
-    if type(last) == type({}):
-        outputs = [outputs]
-    return outputs
 
-
-
-def t_static_scan(fn, inputs, start):
+def static_scan(fn, inputs, start):
     last = start
     indices = range(inputs[0].shape[0])
     flag = True
@@ -1577,10 +1256,10 @@ def uniform_weight_init(given_scale):
 
 def tensorstats(tensor, prefix=None):
     metrics = {
-        "mean": to_np(torch.mean(tensor)),
-        "std": to_np(torch.std(tensor)),
-        "min": to_np(torch.min(tensor)),
-        "max": to_np(torch.max(tensor)),
+        "mean": to_np(Tensor.mean(tensor)),
+        "std": to_np(Tensor.std(tensor)),
+        "min": to_np(Tensor.min(tensor)),
+        "max": to_np(Tensor.max(tensor)),
     }
     if prefix:
         metrics = {f"{prefix}_{k}": v for k, v in metrics.items()}

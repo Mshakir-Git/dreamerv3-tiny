@@ -28,6 +28,7 @@ from tinygrad import Device
 
 Device.DEFAULT="GPU"
 
+##Change the steps overide in __call__() to change eval behaviour
 
 class Dreamer:
     def __init__(self, obs_space, act_space, config, logger, dataset):
@@ -74,6 +75,7 @@ class Dreamer:
                 self._train(next(self._dataset))
                 self._update_count += 1
                 self._metrics["update_count"] = self._update_count
+            # if self._should_log(step):
             if self._should_log(step):
                 for name, values in self._metrics.items():
                     self._logger.scalar(name, float(np.mean(values)))
@@ -92,25 +94,20 @@ class Dreamer:
 
 
     def _policy(self, obs, state, training):
-        # print(obs)
         if state is None:
             latent = action = None
         else:
             latent, action = state
-            # for k,v in latent.items():
-            #     print(k,v.numpy())
         obs = self._wm.preprocess(obs)
 
         embed = self._wm.encoder(obs)
         latent, _ = self._wm.dynamics.obs_step(latent, action, embed, obs["is_first"])
-        # print(latent)
         if self._config.eval_state_mean:
             latent["stoch"] = latent["mean"]
         feat = self._wm.dynamics.get_feat(latent)
         if not training:
             actor = self._task_behavior.actor(feat)
             action = actor.mode()
-            # print("mode",actor.mode().numpy())
         elif self._should_expl(self._step):
             actor = self._expl_behavior.actor(feat)
             action = actor.sample()
@@ -139,11 +136,9 @@ class Dreamer:
     def _train(self, data):
         metrics = {}
         print("Tiny (Dreamer._train)")
-        print("Tiny WM")
+        print("Training World Model")
         post, context, mets = self._wm._train(data)
-        # metrics.update(mets)
-        # print(post)
-        # exit()
+        metrics.update(mets)
         start = post
         reward = lambda f, s, a: self._wm.heads["reward"](
             self._wm.dynamics.get_feat(s)
@@ -152,12 +147,12 @@ class Dreamer:
         self._expl_behavior._train(start, reward)
         if self._config.expl_behavior != "greedy":
             self._expl_behavior.train(start, context, data)
-            # metrics.update({"expl_" + key: value for key, value in mets.items()})
-        # for name, value in metrics.items():
-        #     if not name in self._metrics.keys():
-        #         self._metrics[name] = [value]
-        #     else:
-        #         self._metrics[name].append(value)
+            metrics.update({"expl_" + key: value for key, value in mets.items()})
+        for name, value in metrics.items():
+            if not name in self._metrics.keys():
+                self._metrics[name] = [value]
+            else:
+                self._metrics[name].append(value)
 
         
 
@@ -283,7 +278,7 @@ def main(config):
         prefill = max(0, config.prefill - count_steps(config.traindir))
         print(f"Prefill dataset ({prefill} steps).")
         if hasattr(acts, "discrete"):
-            random_actor = tools.t_OneHotDist(
+            random_actor = tools.OneHotDist(
                 Tensor.zeros(config.num_actions).repeat([config.envs, 1])
             )
         else:
@@ -336,7 +331,6 @@ def main(config):
         logger.write()
         print("Step : ",agent._step )
 
-        print("skip eval")
         if config.eval_episode_num > 0:
             print("Start evaluation.")
             eval_policy = functools.partial(agent, training=False)
@@ -355,20 +349,20 @@ def main(config):
             if config.video_pred_log:
                 video_pred = agent._wm.video_pred(next(eval_dataset))
                 logger.video("eval_openl", to_np(video_pred))
-        # print("Start training.")
-        # state = tools.simulate(
-        #     agent,
-        #     train_envs,
-        #     train_eps,
-        #     config.traindir,
-        #     logger,
-        #     limit=config.dataset_size,
-        #     steps=config.eval_every,
-        #     state=state,
-        # )
-        # print("Saved Checkpoint")
-        # state_dict = get_state_dict(agent)
-        # safe_save(state_dict,logdir / "model.safetensors")
+        print("Start training.")
+        state = tools.simulate(
+            agent,
+            train_envs,
+            train_eps,
+            config.traindir,
+            logger,
+            limit=config.dataset_size,
+            steps=config.eval_every,
+            state=state,
+        )
+        print("Saved Checkpoint")
+        state_dict = get_state_dict(agent)
+        safe_save(state_dict,logdir / "model.safetensors")
 
     for env in train_envs + eval_envs:
         try:
