@@ -633,43 +633,6 @@ class t_OneHotDist(OneHotCategoricalDistribution):
         value = value[..., :1]
         return log_pmf.gather(value,-1).squeeze(-1)
 
-# class t_OneHotDist(torchd.one_hot_categorical.OneHotCategorical):
-#     def __init__(self, logits=None, probs=None, unimix_ratio=0.0):
-#         Tensor.dim=lambda self:self.ndim
-#         Tensor.all=lambda self,dim:-1
-#         Tensor.ndimension=lambda self:self.ndim
-#         Tensor.size=lambda self:self.shape
-#         def logsumexp(x, axis=None,dim=1,keepdim=True):
-#             """Compute the log of the sum of exponentials of input elements."""
-#             x_max = Tensor.max(x, axis=axis, keepdim=True)
-#             return Tensor.log(Tensor.sum(Tensor.exp(x - x_max), axis=axis, keepdim=True)) + x_max
-#         Tensor.logsumexp=logsumexp
-#         if logits is not None and unimix_ratio > 0.0:
-#             probs = F.softmax(logits, dim=-1)
-#             probs = probs * (1.0 - unimix_ratio) + unimix_ratio / probs.shape[-1]
-#             print("tiny",probs.numpy)
-#             logits = Tensor.log(probs)
-#             super().__init__(logits=logits, probs=None)
-#         else:
-#             super().__init__(logits=logits, probs=probs)
-
-#     def mode(self):
-#         _mode = F.one_hot(
-#             Tensor.argmax(super().logits, axis=-1), super().logits.shape[-1]
-#         )
-#         return _mode.detach() + super().logits - super().logits.detach()
-
-#     def sample(self, sample_shape=(), seed=None):
-#         if seed is not None:
-#             raise ValueError("need to check")
-#         sample = super().sample(sample_shape)
-#         probs = super().probs
-#         while len(probs.shape) < len(sample.shape):
-#             probs = probs[None]
-#         sample += probs - probs.detach()
-#         return sample
-
-import tinygrad as tiny
 
 class t_DiscDist:
     def __init__(
@@ -714,9 +677,9 @@ class t_DiscDist:
         #     (Tensor.clip((self.buckets - x[..., None])*1000000000 ,0,1)).cast(tiny.dtypes.int32), axis=-1
         # )
 
-        below = Tensor.sum((self.buckets <= x[..., None]).cast(tiny.dtypes.int32), axis=-1) - 1
+        below = Tensor.sum((self.buckets <= x[..., None]).cast(dtypes.int32), axis=-1) - 1
         above = self.buckets.shape[0] - Tensor.sum(
-            (self.buckets > x[..., None]).cast(tiny.dtypes.int32), axis=-1
+            (self.buckets > x[..., None]).cast(dtypes.int32), axis=-1
         )
 
         # below.requires_grad=False
