@@ -1,25 +1,29 @@
 # tiny-dreamerv3
 
+
+## WIP
+
 What is Working
-1: World Model/Actor/Crtic forward/Backward pass (Slow)(Can be buggy)
-2: Video Prediction (Tensorboard)
+*  World Model/Actor/Crtic forward/Backward pass (Slow)(Can be buggy)
+*  Video Prediction (Tensorboard)
 
 Needs to be Added
-1: TinyJit
+* Test and Fix bugs
+* Remove unnecessary fluff
+* TinyJit
 
 
 ## Instructions
 
-### Method 1: Manual
+Install python
 
-Get dependencies with python 3.9:
 ```
 pip install -r requirements.txt
 ```
 (Try diifferent version of gym if gym fails)
 
 
-## ROMs
+ ROMs
 
 In order to import ROMS, you need to download `Roms.rar` from the [Atari 2600 VCS ROM Collection](http://www.atarimania.com/rom_collection_archive_atari_2600_roms.html) and extract the `.rar` file.  Once you've done that, run:
 
@@ -27,13 +31,13 @@ In order to import ROMS, you need to download `Roms.rar` from the [Atari 2600 VC
 
 This should print out the names of ROMs as it imports them.  The ROMs will be copied to your `atari_py` installation directory.
 
-## Pong
+Train Atari Pong
 
 ```
 python dreamer.py --configs atari100k --task atari_pong --logdir ./logdir/pong  
 ```
 
-## Check Results
+ Check Results
 
 ```
 tensorboard --logdir ./logdir/pong 
