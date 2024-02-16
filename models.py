@@ -111,8 +111,18 @@ class WorldModel:
             reward=config.reward_head["loss_scale"],
             cont=config.cont_head["loss_scale"],
         )
-
+        params=[]
+        for k,v in tnn.state.get_state_dict(self).items():
+            if(k=="heads.reward._std" or k=="heads.cont._std"):
+                pass
+            else:
+                params.append(v)
+        self.opt=tnn.optim.Adam(params,lr=self._config.model_lr,eps=self._config.opt_eps)
+        
+        
+    
     def _train(self, data):
+
         # action (batch_size, batch_length, act_dim)
         # image (batch_size, batch_length, h, w, ch)
         # reward (batch_size, batch_length)
@@ -127,7 +137,6 @@ class WorldModel:
                 params.append(v)
         # for k,v in tnn.state.get_state_dict().items():
         #     if()
-        opt=tnn.optim.Adam(params,lr=self._config.model_lr,eps=self._config.opt_eps)
 
         data=data.copy()
         data = self.preprocess(data)
@@ -172,11 +181,11 @@ class WorldModel:
             m_loss=Tensor.mean(model_loss)
             assert len(m_loss.shape) == 0, m_loss.shape
             my_metrics["my_loss"] = m_loss.numpy()
-            print("World model Loss",my_metrics["my_loss"],model_loss.dtype)
-            opt.zero_grad()
+            print("World model Loss",my_metrics["my_loss"])
+            self.opt.zero_grad()
             m_loss.backward()
-            opt.step()
-            opt.zero_grad()
+            self.opt.step()
+            self.opt.zero_grad()
             # metrics = self.t_model_opt(Tensor.mean(model_loss), tnn.state.get_parameters(self))
       
 

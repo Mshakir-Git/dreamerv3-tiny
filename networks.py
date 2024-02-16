@@ -376,12 +376,11 @@ class MultiEncoder:
     
 
 
-    
     def forward(self, obs):
         outputs = []
         if self.cnn_shapes:
             inputs = Tensor.cat(*[obs[k] for k in self.cnn_shapes], dim=-1)
-            outputs.append(self._cnn(Tensor(inputs.numpy())))
+            outputs.append(self._cnn(inputs))
         # if self.mlp_shapes:
         #     inputs = torch.cat([obs[k] for k in self.mlp_shapes], -1)
         #     outputs.append(self._mlp(inputs))
@@ -628,30 +627,31 @@ class ConvEncoder:
 
 def uniform_weight_init(given_scale):
     def f(m):
-        if isinstance(m, nn.Linear):
-            in_num = m.in_features
-            out_num = m.out_features
-            denoms = (in_num + out_num) / 2.0
-            scale = given_scale / denoms
-            limit = np.sqrt(3 * scale)
-            # nn.init.uniform_(m.weight.data, a=-limit, b=limit)
-            m.weight=Tensor.uniform(*m.weight.shape,low=-limit, high=limit).cast(dtype=dtypes.float)
-            if hasattr(m.bias, "data"):
-                m.bias.full_like(0.0)
-        elif isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
-            space = m.kernel_size[0] * m.kernel_size[1]
-            in_num = space * m.in_channels
-            out_num = space * m.out_channels
-            denoms = (in_num + out_num) / 2.0
-            scale = given_scale / denoms
-            limit = np.sqrt(3 * scale)
-            m.weight=Tensor.uniform(*m.weight.shape,low=-limit, high=limit).cast(dtype=dtypes.float)
-            if hasattr(m.bias, "data"):
-                m.bias.full_like(0.0)
-        elif isinstance(m, nn.LayerNorm):
-            m.weight.full_like(1.0)
-            if hasattr(m.bias, "data"):
-                m.bias.full_like(0.0)
+        pass
+        # if isinstance(m, nn.Linear):
+        #     in_num = m.in_features
+        #     out_num = m.out_features
+        #     denoms = (in_num + out_num) / 2.0
+        #     scale = given_scale / denoms
+        #     limit = np.sqrt(3 * scale)
+        #     # nn.init.uniform_(m.weight.data, a=-limit, b=limit)
+        #     m.weight=Tensor.uniform(*m.weight.shape,low=-limit, high=limit).cast(dtype=dtypes.float)
+        #     if hasattr(m.bias, "data"):
+        #         m.bias.full_like(0.0)
+        # elif isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
+        #     space = m.kernel_size[0] * m.kernel_size[1]
+        #     in_num = space * m.in_channels
+        #     out_num = space * m.out_channels
+        #     denoms = (in_num + out_num) / 2.0
+        #     scale = given_scale / denoms
+        #     limit = np.sqrt(3 * scale)
+        #     m.weight=Tensor.uniform(*m.weight.shape,low=-limit, high=limit).cast(dtype=dtypes.float)
+        #     if hasattr(m.bias, "data"):
+        #         m.bias.full_like(0.0)
+        # elif isinstance(m, nn.LayerNorm):
+        #     m.weight.full_like(1.0)
+        #     if hasattr(m.bias, "data"):
+        #         m.bias.full_like(0.0)
 
     return f
 

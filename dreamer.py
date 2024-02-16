@@ -331,24 +331,24 @@ def main(config):
         logger.write()
         print("Step : ",agent._step )
 
-        if config.eval_episode_num > 0:
-            print("Start evaluation.")
-            eval_policy = functools.partial(agent, training=False)
-            tools.simulate(
-                eval_policy,
-                eval_envs,
-                eval_eps,
-                config.evaldir,
-                logger,
-                is_eval=True,
-                episodes=config.eval_episode_num,
-            )
-            print("eval done")
+        # if config.eval_episode_num > 0:
+        #     print("Start evaluation.")
+        #     eval_policy = functools.partial(agent, training=False)
+        #     tools.simulate(
+        #         eval_policy,
+        #         eval_envs,
+        #         eval_eps,
+        #         config.evaldir,
+        #         logger,
+        #         is_eval=True,
+        #         episodes=config.eval_episode_num,
+        #     )
+        #     print("eval done")
 
-            print("Start Video pred.")
-            if config.video_pred_log:
-                video_pred = agent._wm.video_pred(next(eval_dataset))
-                logger.video("eval_openl", to_np(video_pred))
+        #     print("Start Video pred.")
+        #     if config.video_pred_log:
+        #         video_pred = agent._wm.video_pred(next(eval_dataset))
+        #         logger.video("eval_openl", to_np(video_pred))
         print("Start training.")
         state = tools.simulate(
             agent,
