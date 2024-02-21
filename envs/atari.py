@@ -1,4 +1,4 @@
-import gym
+import gymnasium as gym
 import numpy as np
 
 
@@ -38,7 +38,7 @@ class Atari:
             from PIL import Image
 
             self._image = Image
-        import gym.envs.atari
+        # import gym.envs.atari
         # import gymnasium.envs.atari
 
         if name == "james_bond":
@@ -52,20 +52,20 @@ class Atari:
         self._length = length
         self._random = np.random.RandomState(seed)
         with self.LOCK:
-            # self._env=gym.make(
-            #     "ALE/Pong-v5",
-            #     obs_type="image",
-            #     frameskip=1,
-            #     repeat_action_probability=0.25 if sticky else 0.0,
-            #     full_action_space=(actions == "all"),
-            #     )
-            self._env = gym.envs.atari.AtariEnv(
-                game=name,
+            self._env=gym.make(
+                "ALE/Pong-v5",
                 obs_type="image",
                 frameskip=1,
                 repeat_action_probability=0.25 if sticky else 0.0,
                 full_action_space=(actions == "needed"),
-            )
+                )
+            # self._env = gym.envs.atari.AtariEnv(
+            #     game=name,
+            #     obs_type="image",
+            #     frameskip=1,
+            #     repeat_action_probability=0.25 if sticky else 0.0,
+            #     full_action_space=(actions == "needed"),
+            # )
         assert self._env.unwrapped.get_action_meanings()[0] == "NOOP"
         shape = self._env.observation_space.shape
         self._buffer = [np.zeros(shape, np.uint8) for _ in range(2)]
@@ -102,7 +102,7 @@ class Atari:
         if len(action.shape) >= 1:
             action = np.argmax(action)
         for repeat in range(self._repeat):
-            _, reward, over, info = self._env.step(action)
+            _, reward, over, info,_ = self._env.step(action)
             self._step += 1
             total += reward
             if repeat == self._repeat - 2:
@@ -129,7 +129,7 @@ class Atari:
         self._env.reset()
         if self._noops:
             for _ in range(self._random.randint(self._noops)):
-                _, _, dead, _ = self._env.step(0)
+                _, _, dead, _,_ = self._env.step(0)
                 if dead:
                     self._env.reset()
         self._last_lives = self._ale.lives()
@@ -165,7 +165,7 @@ class Atari:
         )
 
     def _screen(self, array):
-        self._ale.getScreenRGB2(array)
+        self._ale.getScreenRGB(array)
 
     def close(self):
         return self._env.close()
