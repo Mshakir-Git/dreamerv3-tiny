@@ -102,7 +102,7 @@ class Atari:
         if len(action.shape) >= 1:
             action = np.argmax(action)
         for repeat in range(self._repeat):
-            _, reward, over, info,_ = self._env.step(action)
+            _, reward, _, over, info = self._env.step(action)
             self._step += 1
             total += reward
             if repeat == self._repeat - 2:
@@ -129,7 +129,7 @@ class Atari:
         self._env.reset()
         if self._noops:
             for _ in range(self._random.randint(self._noops)):
-                _, _, dead, _,_ = self._env.step(0)
+                _, _,_ ,dead, _= self._env.step(0)
                 if dead:
                     self._env.reset()
         self._last_lives = self._ale.lives()
