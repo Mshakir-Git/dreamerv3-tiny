@@ -24,8 +24,8 @@ from torch import distributions as torchd
 from tinygrad import Tensor
 from tinygrad.nn.state import safe_save, safe_load, get_state_dict, load_state_dict
 to_np = lambda x: x.detach().cpu().numpy()
-from tinygrad import Device
-
+from tinygrad import Device,nn as tnn
+import time
 Device.DEFAULT="GPU"
 
 ##Change the steps overide in __call__() to change eval behaviour
@@ -70,9 +70,11 @@ class Dreamer:
                 else self._should_train(step)
             )
             #CHANGE This
-            steps=2
+            steps=8
             for _ in range(steps):
+                ts=time.time()
                 self._train(next(self._dataset))
+                print("Time: " ,time.time() - ts)
                 self._update_count += 1
                 self._metrics["update_count"] = self._update_count
             # if self._should_log(step):
@@ -137,17 +139,32 @@ class Dreamer:
         metrics = {}
         print("Tiny (Dreamer._train)")
         print("Training World Model")
-        post, context, mets = self._wm._train(data)
-        metrics.update(mets)
+        # post, context, mets = self._wm._train(data)
+        w_data=data.copy()
+        w_data = self._wm.preprocess(w_data)
+        w_data={k:v.realize() for k,v in w_data.items()}
+        p_stoch,p_deter,p_logit, c_embed,c_feat,c_kl,c_pontent,loss = self._wm._train_jit(**w_data)
+        post={"stoch":p_stoch,"deter":p_deter,"logit":p_logit}
+        context = dict(embed=c_embed,feat=c_feat,kl=c_kl,postent=c_pontent,)
         start = post
         reward = lambda f, s, a: self._wm.heads["reward"](
             self._wm.dynamics.get_feat(s)
         ).mode()
+        print("World LOSS",loss.numpy())
+        mets={"wm_loss":loss.numpy()}
         print("Tiny Train Agent")
-        self._expl_behavior._train(start, reward)
-        if self._config.expl_behavior != "greedy":
-            self._expl_behavior.train(start, context, data)
-            metrics.update({"expl_" + key: value for key, value in mets.items()})
+        # self._expl_behavior._train(start, reward)
+        a_loss,v_loss,_mets=self._expl_behavior._train_jit( objective=reward,**start)
+        mets.update(_mets)
+        print("Actor LOSS",a_loss.numpy())
+        print("Value LOSS",v_loss.numpy())
+        mets["actor loss"]=a_loss.numpy()
+        mets["value loss"]=v_loss.numpy()
+        metrics.update(mets)
+
+        # if self._config.expl_behavior != "greedy":
+        #     self._expl_behavior.train(start, context, data)
+        #     metrics.update({"expl_" + key: value for key, value in mets.items()})
         for name, value in metrics.items():
             if not name in self._metrics.keys():
                 self._metrics[name] = [value]
@@ -325,8 +342,9 @@ def main(config):
         load_state_dict(agent, state_dict)
         agent._should_pretrain._once = False
 
-
+    save_n=0
     # make sure eval will be executed once after config.steps
+
     while agent._step < config.steps + config.eval_every:
         logger.write()
         print("Step : ",agent._step )
@@ -360,9 +378,11 @@ def main(config):
             steps=config.eval_every,
             state=state,
         )
-        print("Saved Checkpoint")
-        state_dict = get_state_dict(agent)
-        safe_save(state_dict,logdir / "model.safetensors")
+        save_n+=1
+        if save_n%5==0:
+            print("Saved Checkpoint")
+            state_dict = get_state_dict(agent)
+            safe_save(state_dict,logdir / "model.safetensors")
 
     for env in train_envs + eval_envs:
         try:

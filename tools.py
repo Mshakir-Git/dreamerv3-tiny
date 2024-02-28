@@ -975,8 +975,8 @@ def lambda_return(reward, value, pcont, bootstrap, lambda_, axis,true_value):
     )
     if axis != 0:
         returns = returns.permute(dims)
-    for i in returns:
-        i.requires_grad=False
+    # for i in returns:
+    #     i.requires_grad=False
     return returns
 
 
@@ -1103,6 +1103,61 @@ def args_type(default):
 
     return lambda x: parse_string(x) if isinstance(x, str) else parse_object(x)
 
+from tinygrad import TinyJit
+
+# @TinyJit
+def static_scan_obs_jit(fn, action, embed, is_first,state):
+    if(state is not None):
+        print(state)
+        exit()
+    inputs=(action, embed, is_first)
+    start=(state,state)
+    last = start
+    indices = range(inputs[0].shape[0])
+    flag = True
+    outputs={}
+    for index in indices:
+        inp = lambda x: (_input[x] for _input in inputs)
+        last = fn(last, *inp(index))
+        if flag:
+            if type(last) == type({}):
+                outputs = {
+                    key: Tensor(value.numpy()).unsqueeze(0) for key, value in last.items()
+                }
+            else:
+                outputs = []
+                for _last in last:
+                    if type(_last) == type({}):
+                        outputs.append(
+                            {
+                                key: Tensor(value.numpy()).unsqueeze(0)
+                                for key, value in _last.items()
+                            }
+                        )
+                    else:
+                        outputs.append(Tensor(_last.numpy()).unsqueeze(0))
+            flag = False
+        else:
+            if type(last) == type({}):
+                for key in last.keys():
+                    outputs[key] = Tensor.cat(
+                        *[outputs[key], last[key].unsqueeze(0)], dim=0
+                    )
+            else:
+                for j in range(len(outputs)):
+                    if type(last[j]) == type({}):
+                        for key in last[j].keys():
+                            outputs[j][key] = Tensor.cat(
+                                *[outputs[j][key], last[j][key].unsqueeze(0)], dim=0
+                            )
+                    else:
+                        outputs[j] = Tensor.cat(
+                            *[outputs[j], last[j].unsqueeze(0)], dim=0
+                        )
+    if type(last) == type({}):
+        outputs = [outputs]
+    post_stoch,post_deter,post_logit,prior_stoch,prior_deter,prior_logit=outputs[0]["stoch"],outputs[0]["deter"],outputs[0]["logit"],outputs[1]["stoch"],outputs[1]["deter"],outputs[1]["logit"]
+    return post_stoch.realize(),post_deter.realize(),post_logit.realize(),prior_stoch.realize(),prior_deter.realize(),prior_logit.realize()
 
 
 def static_scan(fn, inputs, start):

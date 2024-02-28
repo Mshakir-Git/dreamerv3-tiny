@@ -144,15 +144,52 @@ class RSSM():
         swap = lambda x: x.permute([1, 0] + list(range(2, len(x.shape))))
         # (batch, time, ch) -> (time, batch, ch)
         embed, action, is_first = swap(embed), swap(action), swap(is_first)
+        #no jit
         # prev_state[0] means selecting posterior of return(posterior, prior) from obs_step
-        post, prior = tools.static_scan(
+        # post, prior = tools.static_scan(
+        #     lambda prev_state, prev_act, embed, is_first: self.obs_step(
+        #         prev_state[0], prev_act, embed, is_first
+        #     ),
+        #     (action, embed, is_first),
+        #     (state, state),
+        # )
+        
+        #both jit (step/scan)
+        # def process_obs_return(post_prior):
+        #     post_stoch,post_deter,post_logit,prior_stoch,prior_deter,prior_logit=post_prior
+        #     _post={"stoch":post_stoch,"deter":post_deter,"logit":post_logit}
+        #     _prior={"stoch":prior_stoch,"deter":prior_deter,"logit":prior_logit}
+        #     return _post,_prior
+        
+        # def process_inputs(prev_act,embed,is_first,prev_state):
+        #     if(prev_state == None):
+        #         return {"prev_act":prev_act.realize(),"embed":embed.realize(),"is_first":is_first.realize(),
+        #                 "_stoch":Tensor([2,2,2]).realize(),"deter":Tensor([2,2,2]).realize(),"logit":Tensor([2,2,2]).realize()}
+        #     else:
+        #         return {"prev_act":prev_act.realize(),"embed":embed.realize(),"is_first":is_first.realize(),
+        #                 "_stoch":prev_state["stoch"].realize(),"deter":prev_state["deter"].realize(),"logit":prev_state["logit"].realize()}
+        
+        # post_stoch,post_deter,post_logit,prior_stoch,prior_deter,prior_logit= tools.static_scan_obs_jit(
+        #     lambda prev_state, prev_act, embed, is_first: process_obs_return(self.obs_step_jitted(
+        #          **process_inputs(prev_act, embed, is_first,prev_state[0])
+        #     )),
+        #     action.realize(), embed.realize(), is_first.realize(),state
+        # )
+
+        # post={"stoch":post_stoch,"deter":post_deter,"logit":post_logit}
+        # prior={"stoch":prior_stoch,"deter":prior_deter,"logit":prior_logit}
+
+        #scan jit
+        post_stoch,post_deter,post_logit,prior_stoch,prior_deter,prior_logit= tools.static_scan_obs_jit(
             lambda prev_state, prev_act, embed, is_first: self.obs_step(
                 prev_state[0], prev_act, embed, is_first
             ),
-            (action, embed, is_first),
-            (state, state),
+            action.realize(), embed.realize(), is_first.realize(),state
         )
 
+        post={"stoch":post_stoch,"deter":post_deter,"logit":post_logit}
+        prior={"stoch":prior_stoch,"deter":prior_deter,"logit":prior_logit}
+        
         # (batch, time, stoch, discrete_num) -> (batch, time, stoch, discrete_num)
         post = {k: swap(v) for k, v in post.items()}
         prior = {k: swap(v) for k, v in prior.items()}
@@ -220,6 +257,73 @@ class RSSM():
             stoch = self.get_dist(stats).mode()
         post = {"stoch": stoch, "deter": prior["deter"], **stats}
         return post, prior
+    
+
+    # @TinyJit
+    def obs_step_jitted(self, prev_act, embed, is_first,_stoch,deter,logit,sample=True):
+
+        # initialize all prev_state
+        prev_state={"stoch":_stoch,"deter":deter,"logit":logit}
+        if len(_stoch.shape) == (3,) or sum(is_first.numpy()) == is_first.shape[0]:
+            # if self.is_first_bypass==0:
+            # print("Once")
+            # exit()
+            self.is_first_bypass+=1
+            prev_state = self.initial(is_first.shape[0])
+            prev_act = Tensor.zeros(*(is_first.shape[0], self._num_actions)) #.to(self._device)
+        # overwrite the prev_state only where is_first=True
+        elif sum(is_first.numpy()) > 0:
+            is_first = is_first[:, None]
+            prev_act *= 1.0 - is_first
+            init_state = self.initial(is_first.shape[0])
+            for key, val in prev_state.items():
+                is_first_r = Tensor.reshape(
+                    is_first,
+                    is_first.shape + (1,) * (len(val.shape) - len(is_first.shape)),
+                )
+                prev_state[key] = (
+                    val * (1.0 - is_first_r) + init_state[key] * is_first_r
+                )
+
+        # prior = self.img_step(prev_state, prev_act)
+        prev_stoch = prev_state["stoch"]
+        if self._discrete:
+            shape = list(prev_stoch.shape[:-2]) + [self._stoch * self._discrete]
+            # (batch, stoch, discrete_num) -> (batch, stoch * discrete_num)
+            prev_stoch = prev_stoch.reshape(shape)
+        # (batch, stoch * discrete_num) -> (batch, stoch * discrete_num + action)
+        x = Tensor.cat(*[prev_stoch, prev_act], dim=-1)
+        # (batch, stoch * discrete_num + action, embed) -> (batch, hidden)
+        x = x.sequential(self._img_in_layers) #self._img_in_layers(x)
+        for _ in range(self._rec_depth):  # rec depth is not correctly implemented
+            deter = prev_state["deter"]
+            # (batch, hidden), (batch, deter) -> (batch, deter), (batch, deter)
+            x, deter = self._cell(x, [deter])
+            deter = deter[0]  # Keras wraps the state in a list.
+        # (batch, deter) -> (batch, hidden)
+        x = x.sequential(self._img_out_layers) #self._img_out_layers(x)
+        # (batch, hidden) -> (batch_size, stoch, discrete_num)
+        stats = self._suff_stats_layer("ims", x)
+        if sample:
+            stoch = self.get_dist(stats).sample()
+        else:
+            stoch = self.get_dist(stats).mode()
+        prior = {"stoch": stoch, "deter": deter, **stats}
+        
+        x = Tensor.cat(*[prior["deter"], embed], dim=-1)
+        # (batch_size, prior_deter + embed) -> (batch_size, hidden)
+        x = x.sequential(self._obs_out_layers) #self._obs_out_layers(x)
+        # (batch_size, hidden) -> (batch_size, stoch, discrete_num)
+        stats = self._suff_stats_layer("obs", x)
+        if sample:
+            stoch = self.get_dist(stats).sample()
+        else:
+            stoch = self.get_dist(stats).mode()
+        post = {"stoch": stoch, "deter": prior["deter"], **stats}
+        post_stoch,post_deter,post_logit=post["stoch"].realize(),post["deter"].realize(),post["logit"].realize()
+        prior_stoch,prior_deter,prior_logit=prior["stoch"].realize(),prior["deter"].realize(),prior["logit"].realize()
+
+        return post_stoch,post_deter,post_logit,prior_stoch,prior_deter,prior_logit
 
     def get_stoch(self, deter):
         # x = self._img_out_layers(deter)
@@ -377,6 +481,7 @@ class MultiEncoder:
 
 
     def forward(self, obs):
+        # print("***********forward***********")
         outputs = []
         if self.cnn_shapes:
             inputs = Tensor.cat(*[obs[k] for k in self.cnn_shapes], dim=-1)
