@@ -64,53 +64,53 @@ class RSSM():
             inp_dim = self._stoch * self._discrete + num_actions
         else:
             inp_dim = self._stoch + num_actions
-        inp_layers.append(nn.Linear(inp_dim, self._hidden, bias=False))
+        inp_layers.append(Linear_Wrapper(inp_dim, self._hidden, bias=False))
         if norm:
             inp_layers.append(nn.LayerNorm(self._hidden, eps=1e-03))
         inp_layers.append(act)
         self._img_in_layers = inp_layers #call x.sequential layers
-        for layer in  self._img_in_layers: tools.weight_init(layer)
+        for layer in  self._img_in_layers: t_weight_init(layer)
         # self._img_in_layers.apply(tools.weight_init)
         self._cell = GRUCell(self._hidden, self._deter, norm=norm)
-        for layer in self._cell.layers: tools.weight_init(layer)
+        for layer in self._cell.layers: t_weight_init(layer)
         # self._cell.apply(tools.weight_init)
 
         #IMG OUT
         img_out_layers = []
         inp_dim = self._deter
-        img_out_layers.append(nn.Linear(inp_dim, self._hidden, bias=False))
+        img_out_layers.append(Linear_Wrapper(inp_dim, self._hidden, bias=False))
         if norm:
             img_out_layers.append(nn.LayerNorm(self._hidden, eps=1e-03))
         img_out_layers.append(act)
         self._img_out_layers = img_out_layers #call x.sequential layers
-        for layer in  self._img_out_layers: tools.weight_init(layer)
+        for layer in  self._img_out_layers: t_weight_init(layer)
         # self._img_out_layers.apply(tools.weight_init)
 
         #OBS OUT
         obs_out_layers = []
         inp_dim = self._deter + self._embed
-        obs_out_layers.append(nn.Linear(inp_dim, self._hidden, bias=False))
+        obs_out_layers.append(Linear_Wrapper(inp_dim, self._hidden, bias=False))
         if norm:
             obs_out_layers.append(nn.LayerNorm(self._hidden, eps=1e-03))
         obs_out_layers.append(act)
         self._obs_out_layers = obs_out_layers #call x.sequential layers
-        for layer in  self._obs_out_layers: tools.weight_init(layer)
+        for layer in  self._obs_out_layers: t_weight_init(layer)
         # self._obs_out_layers.apply(tools.weight_init)
 
         #DISCRETE STOCH
         if self._discrete:
-            self._imgs_stat_layer = nn.Linear(
+            self._imgs_stat_layer = Linear_Wrapper(
                 self._hidden, self._stoch * self._discrete
             )
-            tools.uniform_weight_init(1.0)(self._imgs_stat_layer)
-            self._obs_stat_layer = nn.Linear(self._hidden, self._stoch * self._discrete)
-            tools.uniform_weight_init(1.0)(self._obs_stat_layer)
+            uniform_weight_init(1.0)(self._imgs_stat_layer)
+            self._obs_stat_layer = Linear_Wrapper(self._hidden, self._stoch * self._discrete)
+            uniform_weight_init(1.0)(self._obs_stat_layer)
 
         else:
-            self._imgs_stat_layer = nn.Linear(self._hidden, 2 * self._stoch)
-            tools.uniform_weight_init(1.0)(self._imgs_stat_layer)
-            self._obs_stat_layer = nn.Linear(self._hidden, 2 * self._stoch)
-            tools.uniform_weight_init(1.0)(self._obs_stat_layer)
+            self._imgs_stat_layer = Linear_Wrapper(self._hidden, 2 * self._stoch)
+            uniform_weight_init(1.0)(self._imgs_stat_layer)
+            self._obs_stat_layer = Linear_Wrapper(self._hidden, 2 * self._stoch)
+            uniform_weight_init(1.0)(self._obs_stat_layer)
 
         if self._initial == "learned":
             self.W = Tensor(np.zeros((1, self._deter))).cast(dtype=dtypes.float)
@@ -184,7 +184,7 @@ class RSSM():
             lambda prev_state, prev_act, embed, is_first: self.obs_step(
                 prev_state[0], prev_act, embed, is_first
             ),
-            action.realize(), embed.realize(), is_first.realize(),state
+            action, embed, is_first,state
         )
 
         post={"stoch":post_stoch,"deter":post_deter,"logit":post_logit}
@@ -252,7 +252,8 @@ class RSSM():
         # (batch_size, hidden) -> (batch_size, stoch, discrete_num)
         stats = self._suff_stats_layer("obs", x)
         if sample:
-            stoch = self.get_dist(stats).sample()
+            dist=self.get_dist(stats)
+            stoch = dist.sample()
         else:
             stoch = self.get_dist(stats).mode()
         post = {"stoch": stoch, "deter": prior["deter"], **stats}
@@ -592,85 +593,101 @@ class MultiDecoder():
 
 
 
-# def trunc_normal_(tensor:Tensor, mean, std, a, b, generator=None):
-#     # Method based on https://people.sc.fsu.edu/~jburkardt/presentations/truncated_normal.pdf
-#     def norm_cdf(x):
-#         # Computes standard normal cumulative distribution function
-#         return (1. + math.erf(x / math.sqrt(2.))) / 2.
+def trunc_normal_(tensor:Tensor, mean, std, a, b, generator=None):
+    # Method based on https://people.sc.fsu.edu/~jburkardt/presentations/truncated_normal.pdf
+    def norm_cdf(x):
+        # Computes standard normal cumulative distribution function
+        return (1. + math.erf(x / math.sqrt(2.))) / 2.
+    
+    def erfinv(x):
+        c1=float(0.8862269254527580)
+        c2=float(0.2320136665346544)
+        c3=float(0.1275561753055979)
+        c4=float(0.0865521292415475)
+        x2=x*x
+        x3=x*x2
+        x5=x3*x2
+        x7=x5*x2
+        return c1*x + c2*x3 + c3*x5 +c4*x7
 
-#     if (mean < a - 2 * std) or (mean > b + 2 * std):
-#         print("mean is more than 2 std from [a, b] in nn.init.trunc_normal_. "
-#                       "The distribution of values may be incorrect.")
+    if (mean < a - 2 * std) or (mean > b + 2 * std):
+        print("mean is more than 2 std from [a, b] in nn.init.trunc_normal_. "
+                      "The distribution of values may be incorrect.")
 
-#     # Tensor.no_grad = True
-#     # Values are generated by using a truncated uniform distribution and
-#     # then using the inverse CDF for the normal distribution.
-#     # Get upper and lower cdf values
-#     l = norm_cdf((a - mean) / std)
-#     u = norm_cdf((b - mean) / std)  
-#     # # Uniformly fill tensor with values from [l, u], then translate to
-#     # # [2l-1, 2u-1].
-#     # tensor.uniform(2 * l - 1, 2 * u - 1)  
-#     # # Use inverse cdf transform for normal distribution to get truncated
-#     # # standard normal
-#     # tensor=Tensor(torch.erfinv(torch.Tensor(tensor.numpy())).numpy())
-#     # # tensor.erfinv_()    //Port this
-#     # # Transform to proper mean, std
-#     # tensor.mul(std * math.sqrt(2.))
-#     # tensor.add(mean)   
-#     # # Clamp to ensure it's in the proper range
-#     # tensor=Tensor(torch.clamp(torch.Tensor(tensor.numpy()),min=a, max=b).numpy())
-#     # # tensor.clamp_(min=a, max=b) //Port this
-
-#     # Uniformly fill tensor with values from [l, u], then translate to
-#     # [2l-1, 2u-1].
-#     # tensor.uniform_(2 * l - 1, 2 * u - 1, generator=generator)
-#     tensor=Tensor(torch.Tensor(tensor.numpy()).uniform_(2 * l - 1, 2 * u - 1).numpy())
-#     # Use inverse cdf transform for normal distribution to get truncated
-#     # standard normal
-#     tensor=Tensor(torch.erfinv(torch.Tensor(tensor.numpy())).numpy())
-#     # Transform to proper mean, std
-#     # tensor.mul_(std * math.sqrt(2.))
-#     tensor=Tensor(torch.Tensor(tensor.numpy()).mul_(std * math.sqrt(2.)).numpy())
-#     # tensor.add_(mean)
-#     tensor=Tensor(torch.Tensor(tensor.numpy()).add_(mean).numpy())
-#     # Clamp to ensure it's in the proper range
-#     tensor=Tensor(torch.Tensor(tensor.numpy()).clamp_(min=a, max=b).numpy())
-#     return tensor
+    # Values are generated by using a truncated uniform distribution and
+    # then using the inverse CDF for the normal distribution.
+    # Get upper and lower cdf values
+    l = norm_cdf((a - mean) / std)
+    u = norm_cdf((b - mean) / std)  
+    # # Uniformly fill tensor with values from [l, u], then translate to
+    # # [2l-1, 2u-1].
+    # tensor.uniform(2 * l - 1, 2 * u - 1)  
+    # # Use inverse cdf transform for normal distribution to get truncated
+    # # standard normal
+    # tensor=Tensor(torch.erfinv(torch.Tensor(tensor.numpy())).numpy())
+    # # tensor.erfinv_()    //Port this
+    # # Transform to proper mean, std
+    # tensor.mul(std * math.sqrt(2.))
+    # tensor.add(mean)   
+    # # Clamp to ensure it's in the proper range
+    # tensor=Tensor(torch.clamp(torch.Tensor(tensor.numpy()),min=a, max=b).numpy())
+    # # tensor.clamp_(min=a, max=b) //Port this
+    # ret_tensor=Tensor.uniform(tensor.shape,2 * l - 1, 2 * u - 1)
+    ret_tensor=Tensor.uniform(*tensor.shape,low=2 * l - 1,high= 2 * u - 1)
+    # Uniformly fill tensor with values from [l, u], then translate to
+    # [2l-1, 2u-1].
+    # tensor.uniform(2 * l - 1, 2 * u - 1, generator=generator)
+    # tensor=Tensor(torch.Tensor(tensor.numpy()).uniform_(2 * l - 1, 2 * u - 1).numpy())
+    # Use inverse cdf transform for normal distribution to get truncated
+    # standard normal
+    # tensor=Tensor(torch.erfinv(torch.Tensor(tensor.numpy())).numpy())
+    ret_tensor=erfinv(ret_tensor)
+    # Transform to proper mean, std
+    ret_tensor.mul(std * math.sqrt(2.))
+    # tensor=Tensor(torch.Tensor(tensor.numpy()).mul_(std * math.sqrt(2.)).numpy())
+    ret_tensor.add(mean)
+    # tensor=Tensor(torch.Tensor(tensor.numpy()).add_(mean).numpy())
+    # Clamp to ensure it's in the proper range
+    # tensor=Tensor(torch.Tensor(tensor.numpy()).clamp_(min=a, max=b).numpy())
+    ret_tensor.clip(min_=a, max_=b)
+    return ret_tensor.detach()
     
 def t_weight_init(m):
-    pass
-    # if isinstance(m, nn.Linear):
-    #     in_num = m.in_features
-    #     out_num = m.out_features
-    #     denoms = (in_num + out_num) / 2.0
-    #     scale = 1.0 / denoms
-    #     std = np.sqrt(scale) / 0.87962566103423978
-    #     trunc_normal_(
-    #         m.weight, mean=0.0, std=std, a=-2.0 * std, b=2.0 * std
-    #     )
-    #     if hasattr(m.bias, "data"):
-    #         m.bias.full_like(0.0)
-    # if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
-    #     print("dir",dir(m))
-    #     space = m.kernel_size[0] * m.kernel_size[1]
-    #     in_num = space * m.in_channels
-    #     out_num = space * m.out_channels
-    #     denoms = (in_num + out_num) / 2.0
-    #     scale = 1.0 / denoms
-    #     std = np.sqrt(scale) / 0.87962566103423978
-    #     # print("tiny",m.weight.numpy())
-    #     m.weight=trunc_normal_(
-    #         m.weight, mean=0.0, std=std, a=-2.0 * std, b=2.0 * std
-    #     )
-    #     # print("tiny",m.weight.numpy())
-    #     # exit()
-    #     if hasattr(m.bias, "data"):
-    #         m.bias.full_like(0.0)
-    # elif isinstance(m, ImgChLayerNorm):
-    #     m.norm.weight.full_like(1.0)
-    #     if hasattr(m.norm.bias, "data"):
-    #         m.norm.bias.full_like(0.0)
+    return
+    if isinstance(m, Linear_Wrapper):
+        in_num = m.in_features
+        out_num = m.out_features
+        denoms = (in_num + out_num) / 2.0
+        scale = 1.0 / denoms
+        std = np.sqrt(scale) / 0.87962566103423978
+        m.weight=trunc_normal_(
+            m.weight, mean=0.0, std=std, a=-2.0 * std, b=2.0 * std
+        )
+        if hasattr(m.bias, "data"):
+            m.bias=m.bias.full_like(0.0)
+    if isinstance(m, Conv2d_Wrapper) or isinstance(m, ConvTranspose2d_Wrapper):
+        space = m.kernel_size[0] * m.kernel_size[1]
+        in_num = space * m.in_channels
+        out_num = space * m.out_channels
+        denoms = (in_num + out_num) / 2.0
+        scale = 1.0 / denoms
+        std = np.sqrt(scale) / 0.87962566103423978
+        m.weight=trunc_normal_(
+            m.weight, mean=0.0, std=std, a=-2.0 * std, b=2.0 * std
+        )
+        if hasattr(m.bias, "data"):
+            m.bias=m.bias.full_like(0.0)
+    elif isinstance(m, ImgChLayerNorm):
+        m.norm.weight=m.norm.weight.full_like(1.0)
+        if hasattr(m.norm.bias, "data"):
+            m.norm.bias=m.norm.bias.full_like(0.0)
+
+
+class Conv2d_Wrapper(nn.Conv2d):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+        self.in_channels=in_channels
+        self.out_channels=out_channels
+        super().__init__(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias)
 
 class ConvEncoder:
     def __init__(
@@ -692,7 +709,7 @@ class ConvEncoder:
         layers = []
         for i in range(stages):
             layers.append(
-                nn.Conv2d(
+                Conv2d_Wrapper(
                     in_channels=in_dim,
                     out_channels=out_dim,
                     kernel_size=kernel_size,
@@ -732,33 +749,51 @@ class ConvEncoder:
 
 def uniform_weight_init(given_scale):
     def f(m):
-        pass
-        # if isinstance(m, nn.Linear):
-        #     in_num = m.in_features
-        #     out_num = m.out_features
-        #     denoms = (in_num + out_num) / 2.0
-        #     scale = given_scale / denoms
-        #     limit = np.sqrt(3 * scale)
-        #     # nn.init.uniform_(m.weight.data, a=-limit, b=limit)
-        #     m.weight=Tensor.uniform(*m.weight.shape,low=-limit, high=limit).cast(dtype=dtypes.float)
-        #     if hasattr(m.bias, "data"):
-        #         m.bias.full_like(0.0)
-        # elif isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
-        #     space = m.kernel_size[0] * m.kernel_size[1]
-        #     in_num = space * m.in_channels
-        #     out_num = space * m.out_channels
-        #     denoms = (in_num + out_num) / 2.0
-        #     scale = given_scale / denoms
-        #     limit = np.sqrt(3 * scale)
-        #     m.weight=Tensor.uniform(*m.weight.shape,low=-limit, high=limit).cast(dtype=dtypes.float)
-        #     if hasattr(m.bias, "data"):
-        #         m.bias.full_like(0.0)
-        # elif isinstance(m, nn.LayerNorm):
-        #     m.weight.full_like(1.0)
-        #     if hasattr(m.bias, "data"):
-        #         m.bias.full_like(0.0)
+        return
+        if isinstance(m, Linear_Wrapper):
+            in_num = m.in_features
+            out_num = m.out_features
+            denoms = (in_num + out_num) / 2.0
+            scale = given_scale / denoms
+            limit = np.sqrt(3 * scale)
+            # nn.init.uniform_(m.weight.data, a=-limit, b=limit)
+            m.weight=Tensor.uniform(*m.weight.shape,low=-limit, high=limit).cast(dtype=dtypes.float).detach()
+            
+            if hasattr(m.bias, "data"):
+                m.bias=m.bias.full_like(0.0)
+
+        elif isinstance(m, Conv2d_Wrapper) or isinstance(m, ConvTranspose2d_Wrapper):
+            space = m.kernel_size[0] * m.kernel_size[1]
+            in_num = space * m.in_channels
+            out_num = space * m.out_channels
+            denoms = (in_num + out_num) / 2.0
+            scale = given_scale / denoms
+            limit = np.sqrt(3 * scale)
+            m.weight=Tensor.uniform(*m.weight.shape,low=-limit, high=limit).cast(dtype=dtypes.float).detach()
+            
+            if hasattr(m.bias, "data"):
+                m.bias=m.bias.full_like(0.0)
+        elif isinstance(m, nn.LayerNorm):
+            m.weight=m.weight.full_like(1.0)
+            if hasattr(m.bias, "data"):
+                m.bias=m.bias.full_like(0.0)
 
     return f
+
+class Linear_Wrapper(nn.Linear):
+    def __init__(self, in_features, out_features, bias=True):
+        self.in_features=in_features
+        self.out_features=out_features
+        super().__init__(in_features, out_features, bias)
+
+
+class ConvTranspose2d_Wrapper(nn.ConvTranspose2d):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, output_padding=0, dilation=1, groups=1, bias=True):
+        self.in_channels=in_channels
+        self.out_channels=out_channels
+        super().__init__(in_channels, out_channels, kernel_size, stride, padding, output_padding, dilation, groups, bias)
+
+
 
 class ConvDecoder():
     def __init__(
@@ -782,7 +817,7 @@ class ConvDecoder():
         out_ch = minres**2 * depth * 2 ** (layer_num - 1)
         self._embed_size = out_ch
 
-        self._linear_layer = nn.Linear(feat_size, out_ch)
+        self._linear_layer = Linear_Wrapper(feat_size, out_ch)
         uniform_weight_init(outscale)(self._linear_layer)
         in_dim = out_ch // (minres**2)
         out_dim = in_dim // 2
@@ -802,7 +837,7 @@ class ConvDecoder():
             pad_h, outpad_h = self.calc_same_pad(k=kernel_size, s=2, d=1)
             pad_w, outpad_w = self.calc_same_pad(k=kernel_size, s=2, d=1)
             layers.append(
-                nn.ConvTranspose2d(
+                ConvTranspose2d_Wrapper(
                     in_dim,
                     out_dim,
                     kernel_size,
@@ -893,7 +928,7 @@ class MLP():
 
         for i in range(layers):
             self.layers.append(
-                 nn.Linear(inp_dim, units, bias=False)
+                 Linear_Wrapper(inp_dim, units, bias=False)
             )
             if norm:
                 self.layers.append(
@@ -911,22 +946,22 @@ class MLP():
         if isinstance(self._shape, dict):
             self.mean_layer = {}
             for name, shape in self._shape.items():
-                self.mean_layer[name] = nn.Linear(inp_dim, int(prod(shape)))
+                self.mean_layer[name] = Linear_Wrapper(inp_dim, int(prod(shape)))
             uniform_weight_init(outscale)(self.mean_layer)
             if isinstance(self._std, str) and self._std == "learned":
                 assert dist in ("tanh_normal", "normal", "trunc_normal", "huber"), dist
                 self.std_layer = {}
                 for name, shape in self._shape.items():
-                    self.std_layer[name] = nn.Linear(inp_dim, int(prod(shape)))
+                    self.std_layer[name] = Linear_Wrapper(inp_dim, int(prod(shape)))
                 uniform_weight_init(outscale)(self.std_layer)
                 # self.std_layer.apply(tools.uniform_weight_init(outscale))
         elif self._shape is not None:
-            self.mean_layer = nn.Linear(inp_dim, int(prod(self._shape)))
+            self.mean_layer = Linear_Wrapper(inp_dim, int(prod(self._shape)))
             uniform_weight_init(outscale)(self.mean_layer)
             # self.mean_layer.apply(tools.uniform_weight_init(outscale))
             if isinstance(self._std, str) and self._std == "learned":
                 assert dist in ("tanh_normal", "normal", "trunc_normal", "huber"), dist
-                self.std_layer = nn.Linear(units, int(prod(self._shape)))
+                self.std_layer = Linear_Wrapper(units, int(prod(self._shape)))
                 uniform_weight_init(outscale)(self.std_layer)
                 # self.std_layer.apply(tools.uniform_weight_init(outscale))
 
@@ -1003,7 +1038,7 @@ class GRUCell():
         self._act = act
         self._update_bias = update_bias
         self.layers = []
-        self.layers.append( nn.Linear(inp_size + size, 3 * size, bias=False)) #"GRU_linear"
+        self.layers.append( Linear_Wrapper(inp_size + size, 3 * size, bias=False)) #"GRU_linear"
         if norm:
             self.layers.append(nn.LayerNorm(3 * size, eps=1e-03)) #"GRU_norm"
 

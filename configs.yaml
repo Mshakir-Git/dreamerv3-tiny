@@ -9,11 +9,11 @@ defaults:
   deterministic_run: False
   steps: 1e6
   parallel: False
-  eval_every: 5
+  eval_every: 1000
   eval_episode_num: 10
-  log_every: 10
+  log_every: 500
   reset_every: 0
-  device: 'cpu'
+  device: 'GPU'
   compile: True
   precision: 32
   debug: False
@@ -26,7 +26,7 @@ defaults:
   action_repeat: 2
   time_limit: 1000
   grayscale: False
-  prefill: 1000
+  prefill: 2500
   reward_EMA: True
 
   # Model
@@ -132,7 +132,7 @@ crafter:
 atari100k:
   steps: 4e5
   envs: 1
-  action_repeat: 2
+  action_repeat: 4
   train_ratio: 1024
   video_pred_log: true
   eval_episode_num: 2

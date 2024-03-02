@@ -457,16 +457,17 @@ class OneHotCategoricalDistribution:
         # print(self.probs,self.logits)
         # probs = Tensor.softmax(self.logits)
         # probs = probs * (1.0 - 0.01) + 0.01 / probs.shape[-1]
+        probs_numpy=self.probs.numpy()
         ret=np.zeros(self.probs.shape)
         if(len(self.probs.shape[:-1])==2):
             x,y=self.probs.shape[:-1]
             for i in range(x):
                 for j in range(y):
-                    ret[i][j]=self.sample_one(self.probs[i][j])
+                    ret[i][j]=self.sample_one(probs_numpy[i][j])
         elif(len(self.probs.shape[:-1])==1):
             x=self.probs.shape[:-1][0]
             for i in range(x):
-                    ret[i]=self.sample_one(self.probs[i])
+                    ret[i]=self.sample_one(probs_numpy[i])
         # print(sum(self.probs.numpy()[0][0]),ret[0][0])
         return Tensor(ret).cast(dtypes.float)
     
@@ -1122,7 +1123,7 @@ def static_scan_obs_jit(fn, action, embed, is_first,state):
         if flag:
             if type(last) == type({}):
                 outputs = {
-                    key: Tensor(value.numpy()).unsqueeze(0) for key, value in last.items()
+                    key: Tensor(value.lazydata, device=value.device, requires_grad=True).unsqueeze(0) for key, value in last.items()
                 }
             else:
                 outputs = []
@@ -1130,12 +1131,12 @@ def static_scan_obs_jit(fn, action, embed, is_first,state):
                     if type(_last) == type({}):
                         outputs.append(
                             {
-                                key: Tensor(value.numpy()).unsqueeze(0)
+                                key: Tensor(value.lazydata, device=value.device, requires_grad=True).unsqueeze(0)
                                 for key, value in _last.items()
                             }
                         )
                     else:
-                        outputs.append(Tensor(_last.numpy()).unsqueeze(0))
+                        outputs.append(Tensor(_last.lazydata, device=_last.device, requires_grad=True).unsqueeze(0))
             flag = False
         else:
             if type(last) == type({}):
@@ -1156,8 +1157,9 @@ def static_scan_obs_jit(fn, action, embed, is_first,state):
                         )
     if type(last) == type({}):
         outputs = [outputs]
+
     post_stoch,post_deter,post_logit,prior_stoch,prior_deter,prior_logit=outputs[0]["stoch"],outputs[0]["deter"],outputs[0]["logit"],outputs[1]["stoch"],outputs[1]["deter"],outputs[1]["logit"]
-    return post_stoch.realize(),post_deter.realize(),post_logit.realize(),prior_stoch.realize(),prior_deter.realize(),prior_logit.realize()
+    return post_stoch,post_deter,post_logit.realize(),prior_stoch,prior_deter,prior_logit.realize()
 
 
 def static_scan(fn, inputs, start):

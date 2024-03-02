@@ -520,7 +520,7 @@ class ImagBehavior:
             actor_loss = actor_loss - (self._config.actor["entropy"] * actor_ent[:-1, ..., None])
             actor_loss = Tensor.mean(actor_loss)
 
-            print("actor_loss",actor_loss.numpy())
+            # print("actor_loss",actor_loss.numpy())
             metrics.update(mets)
             value_input = imag_feat
 
@@ -538,7 +538,7 @@ class ImagBehavior:
                 value_loss = value_loss - value.log_prob(slow_target.mode().detach())
             # (time, batch, 1), (time, batch, 1) -> (1,)
             value_loss = Tensor.mean(weights[:-1] * value_loss[:, :, None])
-            print("value_loss",value_loss.numpy())
+            # print("value_loss",value_loss.numpy())
             metrics.update(tools.tensorstats(reward, "imag_reward"))
 
             # exit()
@@ -664,11 +664,8 @@ class ImagBehavior:
         flatten = lambda x: x.reshape([-1] + list(x.shape[2:]))
         start = {k: flatten(v) for k, v in start.items()}
 
-
-
         def step(prev, _):
             state, _, _ = prev
-
             feat = dynamics.get_feat(state)
             inp = feat.detach()
             action = policy(inp).sample()

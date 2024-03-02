@@ -70,7 +70,6 @@ class Dreamer:
                 else self._should_train(step)
             )
             #CHANGE This
-            steps=8
             for _ in range(steps):
                 ts=time.time()
                 self._train(next(self._dataset))
@@ -325,7 +324,6 @@ def main(config):
         print(f"Logger: ({logger.step} steps).")
 
     print("Simulate agent.")
-    
     train_dataset = make_dataset(train_eps, config)
     eval_dataset = make_dataset(eval_eps, config)
     agent = Dreamer(
