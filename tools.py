@@ -17,7 +17,7 @@ from torch.nn import functional as F
 from torch import distributions as torchd
 from torch.utils.tensorboard import SummaryWriter
 
-from tinygrad import Tensor,dtypes , nn as tnn
+from tinygrad import Tensor,dtypes,TinyJit , nn as tnn
 
 to_np = lambda x: x.detach().cpu().numpy()
 
@@ -452,20 +452,46 @@ class OneHotCategoricalDistribution:
     def logits(self):
         return self._logits
     
+
     def sample(self,shape):
+        probs=self.probs
+
+        # min=float(probs.min().abs().numpy())
+        min=probs.min(axis=1,keepdim=True)/5
+        noise=Tensor.uniform(*(probs.shape),low=-1,high=1)
+        ret:Tensor=probs+(noise*min)
+        max=ret.max(axis=1,keepdim=True)
+        ret=(ret==max).cast(dtypes.float)
+        return ret.detach()
+        # ret=Tensor.zeros(probs.shape)
+        # if(len(probs.shape[:-1])==2):
+        #     x,y=probs.shape[:-1]
+        #     for i in range(x):
+        #         for j in range(y):
+        #             ret[i][j]=self.sample_one_tensor(probs[i][j])
+        # elif(len(probs.shape[:-1])==1):
+        #     x=probs.shape[:-1][0]
+        #     for i in range(x):
+        #             ret[i]=self.sample_one_tensor(probs[i])
+        # # print(sum(self.probs.numpy()[0][0]),ret[0][0])
+        return ret
+    
+
+    def sample_old(self,shape):
         #Improve this
         # print(self.probs,self.logits)
         # probs = Tensor.softmax(self.logits)
         # probs = probs * (1.0 - 0.01) + 0.01 / probs.shape[-1]
-        probs_numpy=self.probs.numpy()
-        ret=np.zeros(self.probs.shape)
-        if(len(self.probs.shape[:-1])==2):
-            x,y=self.probs.shape[:-1]
+        probs=self.probs
+        probs_numpy=probs.numpy()
+        ret=np.zeros(probs.shape)
+        if(len(probs.shape[:-1])==2):
+            x,y=probs.shape[:-1]
             for i in range(x):
                 for j in range(y):
                     ret[i][j]=self.sample_one(probs_numpy[i][j])
-        elif(len(self.probs.shape[:-1])==1):
-            x=self.probs.shape[:-1][0]
+        elif(len(probs.shape[:-1])==1):
+            x=probs.shape[:-1][0]
             for i in range(x):
                     ret[i]=self.sample_one(probs_numpy[i])
         # print(sum(self.probs.numpy()[0][0]),ret[0][0])
@@ -496,6 +522,15 @@ class OneHotCategoricalDistribution:
                 sample = np.zeros(probs.shape)
                 sample[i] = 1
                 return sample
+            
+    # def sample_one_tensor(self,probs):
+    #     # Generate a random number between 0 and 1
+    #     min=float(probs.min().abs().numpy())
+    #     noise=Tensor.uniform(*(probs.shape),low=-min/2,high=min/2)
+    #     ret:Tensor=probs+noise
+    #     max=float(ret.max().numpy())
+    #     ret=(ret==max).cast(dtypes.float)
+    #     return ret.detach().realize()
             
     def sample_one_random(self,probs):
         # Generate a random number between 0 and 1
@@ -558,6 +593,7 @@ class OneHotDist(OneHotCategoricalDistribution):
     def sample(self, sample_shape=(), seed=None):
         if seed is not None:
             raise ValueError("need to check")
+        # sample = super().sample(sample_shape)
         sample = super().sample(sample_shape)
         probs = self.probs
         while len(probs.shape) < len(sample.shape):
@@ -1159,7 +1195,7 @@ def static_scan_obs_jit(fn, action, embed, is_first,state):
         outputs = [outputs]
 
     post_stoch,post_deter,post_logit,prior_stoch,prior_deter,prior_logit=outputs[0]["stoch"],outputs[0]["deter"],outputs[0]["logit"],outputs[1]["stoch"],outputs[1]["deter"],outputs[1]["logit"]
-    return post_stoch,post_deter,post_logit.realize(),prior_stoch,prior_deter,prior_logit.realize()
+    return post_stoch.realize(),post_deter.realize(),post_logit.realize(),prior_stoch.realize(),prior_deter.realize(),prior_logit.realize()
 
 
 def static_scan(fn, inputs, start):
@@ -1173,7 +1209,7 @@ def static_scan(fn, inputs, start):
         if flag:
             if type(last) == type({}):
                 outputs = {
-                    key: Tensor(value.numpy()).unsqueeze(0) for key, value in last.items()
+                    key: Tensor(value.lazydata, device=value.device, requires_grad=True).unsqueeze(0) for key, value in last.items()
                 }
             else:
                 outputs = []
@@ -1181,12 +1217,12 @@ def static_scan(fn, inputs, start):
                     if type(_last) == type({}):
                         outputs.append(
                             {
-                                key: Tensor(value.numpy()).unsqueeze(0)
+                                key: Tensor(value.lazydata, device=value.device, requires_grad=True).unsqueeze(0)
                                 for key, value in _last.items()
                             }
                         )
                     else:
-                        outputs.append(Tensor(_last.numpy()).unsqueeze(0))
+                        outputs.append(Tensor(_last.lazydata, device=_last.device, requires_grad=True).unsqueeze(0))
             flag = False
         else:
             if type(last) == type({}):
@@ -1207,6 +1243,17 @@ def static_scan(fn, inputs, start):
                         )
     if type(last) == type({}):
         outputs = [outputs]
+    # if not flag:
+    #     if type(outputs) == type({}):
+    #         for key in outputs.keys():
+    #             outputs[key].realize()
+    #     else:
+    #         for j in range(len(outputs)):
+    #             if type(outputs[j]) == type({}):
+    #                 for key in outputs[j].keys():
+    #                     outputs[j][key].realize()
+    #             else:
+    #                 outputs[j].realize()
     return outputs
 
 

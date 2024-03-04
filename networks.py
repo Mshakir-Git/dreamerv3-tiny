@@ -217,6 +217,7 @@ class RSSM():
         stats = self._suff_stats_layer("ims", x)
         if sample:
             stoch = self.get_dist(stats).sample()
+            # print("img_step sample",stoch.numpy())
         else:
             stoch = self.get_dist(stats).mode()
         prior = {"stoch": stoch, "deter": deter, **stats}
@@ -255,76 +256,77 @@ class RSSM():
             dist=self.get_dist(stats)
             stoch = dist.sample()
         else:
+            raise KeyboardInterrupt
             stoch = self.get_dist(stats).mode()
         post = {"stoch": stoch, "deter": prior["deter"], **stats}
         return post, prior
     
 
     # @TinyJit
-    def obs_step_jitted(self, prev_act, embed, is_first,_stoch,deter,logit,sample=True):
+    # def obs_step_jitted(self, prev_act, embed, is_first,_stoch,deter,logit,sample=True):
 
-        # initialize all prev_state
-        prev_state={"stoch":_stoch,"deter":deter,"logit":logit}
-        if len(_stoch.shape) == (3,) or sum(is_first.numpy()) == is_first.shape[0]:
-            # if self.is_first_bypass==0:
-            # print("Once")
-            # exit()
-            self.is_first_bypass+=1
-            prev_state = self.initial(is_first.shape[0])
-            prev_act = Tensor.zeros(*(is_first.shape[0], self._num_actions)) #.to(self._device)
-        # overwrite the prev_state only where is_first=True
-        elif sum(is_first.numpy()) > 0:
-            is_first = is_first[:, None]
-            prev_act *= 1.0 - is_first
-            init_state = self.initial(is_first.shape[0])
-            for key, val in prev_state.items():
-                is_first_r = Tensor.reshape(
-                    is_first,
-                    is_first.shape + (1,) * (len(val.shape) - len(is_first.shape)),
-                )
-                prev_state[key] = (
-                    val * (1.0 - is_first_r) + init_state[key] * is_first_r
-                )
+    #     # initialize all prev_state
+    #     prev_state={"stoch":_stoch,"deter":deter,"logit":logit}
+    #     if len(_stoch.shape) == (3,) or sum(is_first.numpy()) == is_first.shape[0]:
+    #         # if self.is_first_bypass==0:
+    #         # print("Once")
+    #         # exit()
+    #         self.is_first_bypass+=1
+    #         prev_state = self.initial(is_first.shape[0])
+    #         prev_act = Tensor.zeros(*(is_first.shape[0], self._num_actions)) #.to(self._device)
+    #     # overwrite the prev_state only where is_first=True
+    #     elif sum(is_first.numpy()) > 0:
+    #         is_first = is_first[:, None]
+    #         prev_act *= 1.0 - is_first
+    #         init_state = self.initial(is_first.shape[0])
+    #         for key, val in prev_state.items():
+    #             is_first_r = Tensor.reshape(
+    #                 is_first,
+    #                 is_first.shape + (1,) * (len(val.shape) - len(is_first.shape)),
+    #             )
+    #             prev_state[key] = (
+    #                 val * (1.0 - is_first_r) + init_state[key] * is_first_r
+    #             )
 
-        # prior = self.img_step(prev_state, prev_act)
-        prev_stoch = prev_state["stoch"]
-        if self._discrete:
-            shape = list(prev_stoch.shape[:-2]) + [self._stoch * self._discrete]
-            # (batch, stoch, discrete_num) -> (batch, stoch * discrete_num)
-            prev_stoch = prev_stoch.reshape(shape)
-        # (batch, stoch * discrete_num) -> (batch, stoch * discrete_num + action)
-        x = Tensor.cat(*[prev_stoch, prev_act], dim=-1)
-        # (batch, stoch * discrete_num + action, embed) -> (batch, hidden)
-        x = x.sequential(self._img_in_layers) #self._img_in_layers(x)
-        for _ in range(self._rec_depth):  # rec depth is not correctly implemented
-            deter = prev_state["deter"]
-            # (batch, hidden), (batch, deter) -> (batch, deter), (batch, deter)
-            x, deter = self._cell(x, [deter])
-            deter = deter[0]  # Keras wraps the state in a list.
-        # (batch, deter) -> (batch, hidden)
-        x = x.sequential(self._img_out_layers) #self._img_out_layers(x)
-        # (batch, hidden) -> (batch_size, stoch, discrete_num)
-        stats = self._suff_stats_layer("ims", x)
-        if sample:
-            stoch = self.get_dist(stats).sample()
-        else:
-            stoch = self.get_dist(stats).mode()
-        prior = {"stoch": stoch, "deter": deter, **stats}
+    #     # prior = self.img_step(prev_state, prev_act)
+    #     prev_stoch = prev_state["stoch"]
+    #     if self._discrete:
+    #         shape = list(prev_stoch.shape[:-2]) + [self._stoch * self._discrete]
+    #         # (batch, stoch, discrete_num) -> (batch, stoch * discrete_num)
+    #         prev_stoch = prev_stoch.reshape(shape)
+    #     # (batch, stoch * discrete_num) -> (batch, stoch * discrete_num + action)
+    #     x = Tensor.cat(*[prev_stoch, prev_act], dim=-1)
+    #     # (batch, stoch * discrete_num + action, embed) -> (batch, hidden)
+    #     x = x.sequential(self._img_in_layers) #self._img_in_layers(x)
+    #     for _ in range(self._rec_depth):  # rec depth is not correctly implemented
+    #         deter = prev_state["deter"]
+    #         # (batch, hidden), (batch, deter) -> (batch, deter), (batch, deter)
+    #         x, deter = self._cell(x, [deter])
+    #         deter = deter[0]  # Keras wraps the state in a list.
+    #     # (batch, deter) -> (batch, hidden)
+    #     x = x.sequential(self._img_out_layers) #self._img_out_layers(x)
+    #     # (batch, hidden) -> (batch_size, stoch, discrete_num)
+    #     stats = self._suff_stats_layer("ims", x)
+    #     if sample:
+    #         stoch = self.get_dist(stats).sample()
+    #     else:
+    #         stoch = self.get_dist(stats).mode()
+    #     prior = {"stoch": stoch, "deter": deter, **stats}
         
-        x = Tensor.cat(*[prior["deter"], embed], dim=-1)
-        # (batch_size, prior_deter + embed) -> (batch_size, hidden)
-        x = x.sequential(self._obs_out_layers) #self._obs_out_layers(x)
-        # (batch_size, hidden) -> (batch_size, stoch, discrete_num)
-        stats = self._suff_stats_layer("obs", x)
-        if sample:
-            stoch = self.get_dist(stats).sample()
-        else:
-            stoch = self.get_dist(stats).mode()
-        post = {"stoch": stoch, "deter": prior["deter"], **stats}
-        post_stoch,post_deter,post_logit=post["stoch"].realize(),post["deter"].realize(),post["logit"].realize()
-        prior_stoch,prior_deter,prior_logit=prior["stoch"].realize(),prior["deter"].realize(),prior["logit"].realize()
+    #     x = Tensor.cat(*[prior["deter"], embed], dim=-1)
+    #     # (batch_size, prior_deter + embed) -> (batch_size, hidden)
+    #     x = x.sequential(self._obs_out_layers) #self._obs_out_layers(x)
+    #     # (batch_size, hidden) -> (batch_size, stoch, discrete_num)
+    #     stats = self._suff_stats_layer("obs", x)
+    #     if sample:
+    #         stoch = self.get_dist(stats).sample()
+    #     else:
+    #         stoch = self.get_dist(stats).mode()
+    #     post = {"stoch": stoch, "deter": prior["deter"], **stats}
+    #     post_stoch,post_deter,post_logit=post["stoch"].realize(),post["deter"].realize(),post["logit"].realize()
+    #     prior_stoch,prior_deter,prior_logit=prior["stoch"].realize(),prior["deter"].realize(),prior["logit"].realize()
 
-        return post_stoch,post_deter,post_logit,prior_stoch,prior_deter,prior_logit
+    #     return post_stoch,post_deter,post_logit,prior_stoch,prior_deter,prior_logit
 
     def get_stoch(self, deter):
         # x = self._img_out_layers(deter)
@@ -633,6 +635,7 @@ def trunc_normal_(tensor:Tensor, mean, std, a, b, generator=None):
     # tensor=Tensor(torch.clamp(torch.Tensor(tensor.numpy()),min=a, max=b).numpy())
     # # tensor.clamp_(min=a, max=b) //Port this
     # ret_tensor=Tensor.uniform(tensor.shape,2 * l - 1, 2 * u - 1)
+    Tensor.no_grad=True
     ret_tensor=Tensor.uniform(*tensor.shape,low=2 * l - 1,high= 2 * u - 1)
     # Uniformly fill tensor with values from [l, u], then translate to
     # [2l-1, 2u-1].
@@ -643,13 +646,14 @@ def trunc_normal_(tensor:Tensor, mean, std, a, b, generator=None):
     # tensor=Tensor(torch.erfinv(torch.Tensor(tensor.numpy())).numpy())
     ret_tensor=erfinv(ret_tensor)
     # Transform to proper mean, std
-    ret_tensor.mul(std * math.sqrt(2.))
+    ret_tensor=ret_tensor* (std * math.sqrt(2.))
     # tensor=Tensor(torch.Tensor(tensor.numpy()).mul_(std * math.sqrt(2.)).numpy())
-    ret_tensor.add(mean)
+    ret_tensor=ret_tensor+mean
     # tensor=Tensor(torch.Tensor(tensor.numpy()).add_(mean).numpy())
     # Clamp to ensure it's in the proper range
     # tensor=Tensor(torch.Tensor(tensor.numpy()).clamp_(min=a, max=b).numpy())
-    ret_tensor.clip(min_=a, max_=b)
+    ret_tensor=ret_tensor.clip(min_=a, max_=b)
+    Tensor.no_grad=False
     return ret_tensor.detach()
     
 def t_weight_init(m):
@@ -675,6 +679,8 @@ def t_weight_init(m):
         m.weight=trunc_normal_(
             m.weight, mean=0.0, std=std, a=-2.0 * std, b=2.0 * std
         )
+        # print("Conv weight",m.weight.numpy())
+        # exit()
         if hasattr(m.bias, "data"):
             m.bias=m.bias.full_like(0.0)
     elif isinstance(m, ImgChLayerNorm):
@@ -688,6 +694,43 @@ class Conv2d_Wrapper(nn.Conv2d):
         self.in_channels=in_channels
         self.out_channels=out_channels
         super().__init__(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias)
+
+
+# class Conv2d_Wrapper(nn.Conv2d):
+#     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+#         self.in_channels=in_channels
+#         self.out_channels=out_channels
+#         super().__init__(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias)
+
+#     def calc_same_pad(self, i, k, s, d):
+#         return max((math.ceil(i / s) - 1) * s + (k - 1) * d + 1 - i, 0)
+
+#     def __call__(self, x: Tensor):
+#         return self.forward(x)
+    
+#     def forward(self, x:Tensor):
+#         ih, iw = x.shape[-2:]
+#         pad_h = self.calc_same_pad(
+#             i=ih, k=self.kernel_size[0], s=self.stride, d=self.dilation
+#         )
+#         pad_w = self.calc_same_pad(
+#             i=iw, k=self.kernel_size[1], s=self.stride, d=self.dilation
+#         )
+
+#         if pad_h > 0 or pad_w > 0:
+#             x = x.pad2d(
+#                  [pad_w // 2, pad_w - pad_w // 2, pad_h // 2, pad_h - pad_h // 2]
+#             )
+
+#         ret = x.conv2d(
+#             self.weight,
+#             self.bias,
+#             self.groups,
+#             self.stride,
+#             self.dilation,
+#             self.padding,
+#         )
+#         return ret
 
 class ConvEncoder:
     def __init__(

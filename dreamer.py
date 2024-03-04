@@ -24,9 +24,9 @@ from torch import distributions as torchd
 from tinygrad import Tensor
 from tinygrad.nn.state import safe_save, safe_load, get_state_dict, load_state_dict
 to_np = lambda x: x.detach().cpu().numpy()
-from tinygrad import Device,nn as tnn
+from tinygrad import Device,dtypes,nn as tnn
 import time
-Device.DEFAULT="GPU"
+Device.DEFAULT="CUDA"
 
 ##Change the steps overide in __call__() to change eval behaviour
 
@@ -146,17 +146,31 @@ class Dreamer:
         post={"stoch":p_stoch,"deter":p_deter,"logit":p_logit}
         context = dict(embed=c_embed,feat=c_feat,kl=c_kl,postent=c_pontent,)
         start = post
-        reward = lambda f, s, a: self._wm.heads["reward"](
-            self._wm.dynamics.get_feat(s)
-        ).mode()
+        # reward = lambda f, s, a: self._wm.heads["reward"](
+        #     self._wm.dynamics.get_feat(s)
+        # ).mode()
         print("World LOSS",loss.numpy())
         mets={"wm_loss":loss.numpy()}
         print("Tiny Train Agent")
         # self._expl_behavior._train(start, reward)
-        a_loss,v_loss,_mets=self._expl_behavior._train_jit( objective=reward,**start)
-        mets.update(_mets)
+        a_loss,v_loss,i_action,i_reward=self._expl_behavior._train_jit(**start)
+        metrics.update(tools.tensorstats(i_reward, "imag_reward"))
+        metrics.update(
+                tools.tensorstats(
+                    Tensor.argmax(i_action, axis=-1).cast(dtypes.float), "imag_action"
+                )
+        )
+        # metrics.update(
+        #         tools.tensorstats(
+        #             Tensor.argmax(p_stoch, axis=-1).cast(dtypes.float), "p_stoch"
+        #         )
+        # )
         print("Actor LOSS",a_loss.numpy())
         print("Value LOSS",v_loss.numpy())
+        # print("imag_action",i_action.numpy())
+        # print("p_stoch",p_stoch.numpy())
+        # print("p_deter",p_deter.numpy())
+        # print("p_logit",p_logit.numpy())
         mets["actor loss"]=a_loss.numpy()
         mets["value loss"]=v_loss.numpy()
         metrics.update(mets)
@@ -347,24 +361,24 @@ def main(config):
         logger.write()
         print("Step : ",agent._step )
 
-        # if config.eval_episode_num > 0:
-        #     print("Start evaluation.")
-        #     eval_policy = functools.partial(agent, training=False)
-        #     tools.simulate(
-        #         eval_policy,
-        #         eval_envs,
-        #         eval_eps,
-        #         config.evaldir,
-        #         logger,
-        #         is_eval=True,
-        #         episodes=config.eval_episode_num,
-        #     )
-        #     print("eval done")
+        if config.eval_episode_num > 0:
+            print("Start evaluation.")
+            eval_policy = functools.partial(agent, training=False)
+            tools.simulate(
+                eval_policy,
+                eval_envs,
+                eval_eps,
+                config.evaldir,
+                logger,
+                is_eval=True,
+                episodes=config.eval_episode_num,
+            )
+            print("eval done")
 
-        #     print("Start Video pred.")
-        #     if config.video_pred_log:
-        #         video_pred = agent._wm.video_pred(next(eval_dataset))
-        #         logger.video("eval_openl", to_np(video_pred))
+            print("Start Video pred.")
+            if config.video_pred_log:
+                video_pred = agent._wm.video_pred(next(eval_dataset))
+                logger.video("eval_openl", to_np(video_pred))
         print("Start training.")
         state = tools.simulate(
             agent,

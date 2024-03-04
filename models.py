@@ -396,13 +396,17 @@ class WorldModel:
 
 
 
-
+# def cumprod_dim_0(input:Tensor):
+#     out=input.numpy()
+#     for i in range(input.shape[0])[1:]:
+#         out[i]=out[i]*out[i-1]
+#     return Tensor(out)
 
 def cumprod_dim_0(input:Tensor):
-    out=input.numpy()
+    out=input.detach()
     for i in range(input.shape[0])[1:]:
         out[i]=out[i]*out[i-1]
-    return Tensor(out)
+    return out.detach()
 
 
 class ImagBehavior:
@@ -485,7 +489,6 @@ class ImagBehavior:
     @TinyJit
     def _train_jit(
         self,
-        objective,
         stoch,
         deter,
         logit
@@ -495,6 +498,9 @@ class ImagBehavior:
         metrics = {}
         start={"stoch":stoch,"deter":deter,"logit":logit}
         with Tensor.train():
+            objective = lambda f, s, a: self._world_model.heads["reward"](
+            self._world_model.dynamics.get_feat(s)
+            ).mode()
             #ACTOR
             imag_feat, imag_state, imag_action = self._imagine(
                 start, self.actor, self._config.imag_horizon
@@ -521,7 +527,7 @@ class ImagBehavior:
             actor_loss = Tensor.mean(actor_loss)
 
             # print("actor_loss",actor_loss.numpy())
-            metrics.update(mets)
+            # metrics.update(mets)
             value_input = imag_feat
 
 
@@ -539,19 +545,19 @@ class ImagBehavior:
             # (time, batch, 1), (time, batch, 1) -> (1,)
             value_loss = Tensor.mean(weights[:-1] * value_loss[:, :, None])
             # print("value_loss",value_loss.numpy())
-            metrics.update(tools.tensorstats(reward, "imag_reward"))
+            # metrics.update(tools.tensorstats_tensor(reward, "imag_reward"))
 
             # exit()
         # metrics.update(tools.tensorstats(value.mode(), "value"))
         # metrics.update(tools.tensorstats(target, "target"))
         # if self._config.actor["dist"] in ["onehot"]:
         #     metrics.update(
-        #         tools.tensorstats(
-        #             torch.argmax(imag_action, dim=-1).float(), "imag_action"
+        #         tools.tensorstats_tensor(
+        #             Tensor.argmax(imag_action, axis=-1).cast(dtypes.float), "imag_action"
         #         )
         #     )
         # else:
-        #     metrics.update(tools.tensorstats(imag_action, "imag_action"))
+        #     metrics.update(tools.tensorstats_tensor(imag_action, "imag_action"))
         # metrics["actor_entropy"] = to_np(torch.mean(actor_ent))
 
             #BACKPROP
@@ -568,96 +574,96 @@ class ImagBehavior:
             # metrics.update(self._actor_opt(actor_loss, self.actor.parameters()))
             # metrics.update(self._value_opt(value_loss, self.value.parameters()))
 
-
-        return actor_loss.realize(),value_loss.realize(),metrics
+        # metrics_relized=(v.realize() for k,v in metrics.items())
+        return actor_loss.realize(),value_loss.realize(),imag_action.realize(),reward.realize()
     
 
 
 
-    def _train(
-        self,
-        start,
-        objective,
-    ):
-        #Change this
-        self._update_slow_target()
-        metrics = {}
-        with Tensor.train():
-            #ACTOR
-            imag_feat, imag_state, imag_action = self._imagine(
-                start, self.actor, self._config.imag_horizon
-            )
-            reward = objective(imag_feat, imag_state, imag_action)
-            actor_ent = self.actor(imag_feat).entropy()
+    # def _train(
+    #     self,
+    #     start,
+    #     objective,
+    # ):
+    #     #Change this
+    #     self._update_slow_target()
+    #     metrics = {}
+    #     with Tensor.train():
+    #         #ACTOR
+    #         imag_feat, imag_state, imag_action = self._imagine(
+    #             start, self.actor, self._config.imag_horizon
+    #         )
+    #         reward = objective(imag_feat, imag_state, imag_action)
+    #         actor_ent = self.actor(imag_feat).entropy()
 
-            state_ent = self._world_model.dynamics.get_dist(imag_state).entropy()
-            # this target is not scaled by ema or sym_log.
-            target, weights, base = self._compute_target(
-                imag_feat, imag_state, reward
-            )
+    #         state_ent = self._world_model.dynamics.get_dist(imag_state).entropy()
+    #         # this target is not scaled by ema or sym_log.
+    #         target, weights, base = self._compute_target(
+    #             imag_feat, imag_state, reward
+    #         )
 
-            actor_loss, mets = self._compute_actor_loss(
-                imag_feat,
-                imag_action,
-                target,
-                weights,
-                base,
-            )
-            # print(actor_ent[:-1, ..., None].shape)
+    #         actor_loss, mets = self._compute_actor_loss(
+    #             imag_feat,
+    #             imag_action,
+    #             target,
+    #             weights,
+    #             base,
+    #         )
+    #         # print(actor_ent[:-1, ..., None].shape)
 
-            actor_loss = actor_loss - (self._config.actor["entropy"] * actor_ent[:-1, ..., None])
-            actor_loss = Tensor.mean(actor_loss)
+    #         actor_loss = actor_loss - (self._config.actor["entropy"] * actor_ent[:-1, ..., None])
+    #         actor_loss = Tensor.mean(actor_loss)
 
-            print("actor_loss",actor_loss.numpy())
-            metrics.update(mets)
-            value_input = imag_feat
-
-
-            #CRITIC (value fn)
-
-            value = self.value(value_input[:-1].detach())
-            target = Tensor.stack(target, dim=1)
-            # (time, batch, 1), (time, batch, 1) -> (time, batch)
-            # print("target",target.shape)
-            # target.requires_grad=False
-            value_loss = -value.log_prob(target.detach())
-            slow_target = self._slow_value(value_input[:-1].detach())
-            if self._config.critic["slow_target"]:
-                value_loss = value_loss - value.log_prob(slow_target.mode().detach())
-            # (time, batch, 1), (time, batch, 1) -> (1,)
-            value_loss = Tensor.mean(weights[:-1] * value_loss[:, :, None])
-            print("value_loss",value_loss.numpy())
-            metrics.update(tools.tensorstats(reward, "imag_reward"))
-
-            # exit()
-        # metrics.update(tools.tensorstats(value.mode(), "value"))
-        # metrics.update(tools.tensorstats(target, "target"))
-        # if self._config.actor["dist"] in ["onehot"]:
-        #     metrics.update(
-        #         tools.tensorstats(
-        #             torch.argmax(imag_action, dim=-1).float(), "imag_action"
-        #         )
-        #     )
-        # else:
-        #     metrics.update(tools.tensorstats(imag_action, "imag_action"))
-        # metrics["actor_entropy"] = to_np(torch.mean(actor_ent))
-
-            #BACKPROP
-            self._actor_opt.zero_grad()
-            actor_loss.backward()
-            self._actor_opt.step()
-            self._actor_opt.zero_grad()
-
-            self._value_opt.zero_grad()
-            value_loss.backward()
-            self._value_opt.step()
-            self._value_opt.zero_grad()
-
-            # metrics.update(self._actor_opt(actor_loss, self.actor.parameters()))
-            # metrics.update(self._value_opt(value_loss, self.value.parameters()))
+    #         print("actor_loss",actor_loss.numpy())
+    #         metrics.update(mets)
+    #         value_input = imag_feat
 
 
-        return imag_feat, imag_state, imag_action, weights, metrics
+    #         #CRITIC (value fn)
+
+    #         value = self.value(value_input[:-1].detach())
+    #         target = Tensor.stack(target, dim=1)
+    #         # (time, batch, 1), (time, batch, 1) -> (time, batch)
+    #         # print("target",target.shape)
+    #         # target.requires_grad=False
+    #         value_loss = -value.log_prob(target.detach())
+    #         slow_target = self._slow_value(value_input[:-1].detach())
+    #         if self._config.critic["slow_target"]:
+    #             value_loss = value_loss - value.log_prob(slow_target.mode().detach())
+    #         # (time, batch, 1), (time, batch, 1) -> (1,)
+    #         value_loss = Tensor.mean(weights[:-1] * value_loss[:, :, None])
+    #         print("value_loss",value_loss.numpy())
+    #         metrics.update(tools.tensorstats(reward, "imag_reward"))
+
+    #         # exit()
+    #     # metrics.update(tools.tensorstats(value.mode(), "value"))
+    #     # metrics.update(tools.tensorstats(target, "target"))
+    #     # if self._config.actor["dist"] in ["onehot"]:
+    #     #     metrics.update(
+    #     #         tools.tensorstats(
+    #     #             torch.argmax(imag_action, dim=-1).float(), "imag_action"
+    #     #         )
+    #     #     )
+    #     # else:
+    #     #     metrics.update(tools.tensorstats(imag_action, "imag_action"))
+    #     # metrics["actor_entropy"] = to_np(torch.mean(actor_ent))
+
+    #         #BACKPROP
+    #         self._actor_opt.zero_grad()
+    #         actor_loss.backward()
+    #         self._actor_opt.step()
+    #         self._actor_opt.zero_grad()
+
+    #         self._value_opt.zero_grad()
+    #         value_loss.backward()
+    #         self._value_opt.step()
+    #         self._value_opt.zero_grad()
+
+    #         # metrics.update(self._actor_opt(actor_loss, self.actor.parameters()))
+    #         # metrics.update(self._value_opt(value_loss, self.value.parameters()))
+
+
+    #     return imag_feat, imag_state, imag_action, weights, metrics
 
     def _imagine(self, start, policy, horizon):
         dynamics = self._world_model.dynamics
@@ -675,9 +681,12 @@ class ImagBehavior:
         succ, feats, actions = tools.static_scan(
             step, [Tensor.arange(horizon)], (start, None, None)
         )
+        # succ, feats, actions = tools.static_scan_imagine(
+        #     step, Tensor.arange(horizon).realize(), start
+        # )
         states = {k: Tensor.cat(*[start[k][None], v[:-1]], dim=0) for k, v in succ.items()}
 
-        return feats, states, actions.cast(dtypes.float)
+        return feats, states, actions
 
     def _compute_target(self, imag_feat, imag_state, reward):
         if "cont" in self._world_model.heads:
