@@ -454,15 +454,35 @@ class OneHotCategoricalDistribution:
     
 
     def sample(self,shape):
-        probs=self.probs
+        probs=self.probs.detach()
 
-        # min=float(probs.min().abs().numpy())
-        min=probs.min(axis=1,keepdim=True)/5
-        noise=Tensor.uniform(*(probs.shape),low=-1,high=1)
-        ret:Tensor=probs+(noise*min)
-        max=ret.max(axis=1,keepdim=True)
-        ret=(ret==max).cast(dtypes.float)
-        return ret.detach()
+        cum_sum=probs.cumsum(-1)
+        # rand=np.random.random()
+        # cum_sum_uni=cum_sum #+ Tensor.uniform(*cum_sum.shape,low=0,high=0.00001) #add noise?
+        rand=Tensor.rand((cum_sum.shape[-2],1))
+        diff=cum_sum-rand
+        # mask=(diff<0).cast(dtypes.float)*2
+        # masked_diff=diff+mask
+        clipped=diff.clip(min_=0,max_=1)
+        swap=clipped.where(0,1)
+        swapped_clip=clipped+swap
+        min=swapped_clip.min(axis=-1,keepdim=True)
+        # min=masked_diff.min(axis=-1,keepdim=True)
+        # ret=(masked_diff==min).cast(dtypes.float)
+        ret=(swapped_clip==min).cast(dtypes.float)
+        # print("Probs",self.probs.numpy())
+        # print("Sample",ret.numpy())
+        # print("SUM",ret.sum(-1).numpy())
+
+        # assert ret.sum(-1).numpy().all() == Tensor.ones(ret.shape[:-1]).numpy().all()
+
+        #test0
+        # min=probs.min(axis=1,keepdim=True)/10000000
+        # noise=Tensor.uniform(*(probs.shape),low=-1,high=1)
+        # ret:Tensor=probs+(noise*min)
+        # max=ret.max(axis=1,keepdim=True)
+        # ret=(ret==max).cast(dtypes.float)
+        # return ret.detach()
         # ret=Tensor.zeros(probs.shape)
         # if(len(probs.shape[:-1])==2):
         #     x,y=probs.shape[:-1]
@@ -474,7 +494,7 @@ class OneHotCategoricalDistribution:
         #     for i in range(x):
         #             ret[i]=self.sample_one_tensor(probs[i])
         # # print(sum(self.probs.numpy()[0][0]),ret[0][0])
-        return ret
+        return ret.detach()
     
 
     def sample_old(self,shape):
@@ -542,26 +562,30 @@ class OneHotCategoricalDistribution:
 
 def one_hot(cat,classes):
 
-    ret=np.zeros((*cat.shape,classes))
+    ret=Tensor.ones((*cat.shape,classes))
+    ret=ret.cumsum(-1)-1
+    ret=(ret-cat.unsqueeze(-1)).where(0,1)
+    return ret
+    # ret=np.zeros((*cat.shape,classes))
 
-    # for i in range(len(cat.shape)):
-    if(len(ret.shape)==3):
-        for i in range(cat.shape[0]):
-            for j in range(cat.shape[1]):
-                ret[i][j][cat.numpy()[i][j]]=1
-    elif(len(ret.shape)==2):
-        for i in range(cat.shape[0]):
-                ret[i][cat.numpy()[i]]=1
-    elif(len(ret.shape)==4):
-        for i in range(cat.shape[0]):
-            for j in range(cat.shape[1]):
-                for k in range(cat.shape[2]):
-                    ret[i][j][k][cat.numpy()[i][j][k]]=1
-    else:
-        print("one_hot func len wrong",len(ret.shape))
-        raise KeyError
+    # # for i in range(len(cat.shape)):
+    # if(len(ret.shape)==3):
+    #     for i in range(cat.shape[0]):
+    #         for j in range(cat.shape[1]):
+    #             ret[i][j][cat.numpy()[i][j]]=1
+    # elif(len(ret.shape)==2):
+    #     for i in range(cat.shape[0]):
+    #             ret[i][cat.numpy()[i]]=1
+    # elif(len(ret.shape)==4):
+    #     for i in range(cat.shape[0]):
+    #         for j in range(cat.shape[1]):
+    #             for k in range(cat.shape[2]):
+    #                 ret[i][j][k][cat.numpy()[i][j][k]]=1
+    # else:
+    #     print("one_hot func len wrong",len(ret.shape))
+    #     raise KeyError
     
-    return Tensor(ret,dtype=dtypes.float)
+    # return Tensor(ret,dtype=dtypes.float)
      
 GLOBAL_COUNT=0
 class OneHotDist(OneHotCategoricalDistribution):
@@ -678,20 +702,24 @@ class DiscDist:
         above = self.buckets.shape[0] - Tensor.sum(
             (self.buckets > x[..., None]).cast(dtypes.int32), axis=-1
         )
-
         # below.requires_grad=False
         # above.requires_grad=False
         # this is implemented using clip at the original repo as the gradients are not backpropagated for the out of limits.
         below = Tensor.clip(below, 0, self.buckets.shape[0] - 1)
         above = Tensor.clip(above, 0, self.buckets.shape[0] - 1)
 
-        equal = below == above
-        # equal = below - above
+        # equal = (below - above).cast(dtypes.int)
+        equal = (below - above)
+        equal=equal.where(0,1).cast(dtypes.bool)
         # print("Equal",equal.numpy())
         # print("Equal",equal2.numpy())
         # exit()
         dist_to_below = Tensor.where(equal, 1, Tensor.abs(self.buckets[below] - x))
         dist_to_above = Tensor.where(equal, 1, Tensor.abs(self.buckets[above] - x))
+
+        # dist_to_below = Tensor.where(equal, 0, Tensor.abs(self.buckets[below] - x))
+        # dist_to_above = Tensor.where(equal, 0, Tensor.abs(self.buckets[above] - x))
+
         # dist_to_below.requires_grad=False
         # dist_to_above.requires_grad=False
 
@@ -702,8 +730,15 @@ class DiscDist:
         # dist_to_above=zero_or_x_above + one_or_zero
         # dist_to_below=zero_or_x_below+ one_or_zero
 
-        # print(dist_to_above.numpy())
-        # print(dist_to_below.numpy())
+        # print("dist_to_above",dist_to_above.numpy())
+        # print("dist_to_below",dist_to_below.numpy())
+        # # print(dist_to_below2.numpy())
+        # print("equal",equal.numpy())
+        # print("abs below",Tensor.abs(self.buckets[below] - x).numpy())
+        # print("abs above",Tensor.abs(self.buckets[above] - x).numpy())
+        # print("below",below.numpy())
+        # print("above",above.numpy())
+
         # exit()
 
         total = dist_to_below + dist_to_above

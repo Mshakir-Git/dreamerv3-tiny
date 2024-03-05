@@ -738,11 +738,11 @@ class ImagBehavior:
             actor_target = adv
         elif self._config.imag_gradient == "reinforce":
             actor_target = (
-                policy.log_prob(imag_action)[:-1][:, :, None]
+                policy.log_prob(imag_action.detach())[:-1][:, :, None]
                 * (target - self.value(imag_feat[:-1]).mode()).detach().cast(dtypes.float)
             )
             #FOR ATARI
-            actor_target.requires_grad=False
+            # actor_target.requires_grad=False
         elif self._config.imag_gradient == "both":
             actor_target = (
                 policy.log_prob(imag_action)[:-1][:, :, None]
