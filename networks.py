@@ -657,7 +657,7 @@ def trunc_normal_(tensor:Tensor, mean, std, a, b, generator=None):
     return ret_tensor.detach()
     
 def t_weight_init(m):
-    return
+    # return
     if isinstance(m, Linear_Wrapper):
         in_num = m.in_features
         out_num = m.out_features
@@ -670,15 +670,15 @@ def t_weight_init(m):
         if hasattr(m.bias, "data"):
             m.bias=m.bias.full_like(0.0)
     if isinstance(m, Conv2d_Wrapper) or isinstance(m, ConvTranspose2d_Wrapper):
-        space = m.kernel_size[0] * m.kernel_size[1]
-        in_num = space * m.in_channels
-        out_num = space * m.out_channels
-        denoms = (in_num + out_num) / 2.0
-        scale = 1.0 / denoms
-        std = np.sqrt(scale) / 0.87962566103423978
-        m.weight=trunc_normal_(
-            m.weight, mean=0.0, std=std, a=-2.0 * std, b=2.0 * std
-        )
+        # space = m.kernel_size[0] * m.kernel_size[1]
+        # in_num = space * m.in_channels
+        # out_num = space * m.out_channels
+        # denoms = (in_num + out_num) / 2.0
+        # scale = 1.0 / denoms
+        # std = np.sqrt(scale) / 0.87962566103423978
+        # m.weight=trunc_normal_(
+        #     m.weight, mean=0.0, std=std, a=-2.0 * std, b=2.0 * std
+        # )
         # print("Conv weight",m.weight.numpy())
         # exit()
         if hasattr(m.bias, "data"):
@@ -792,7 +792,7 @@ class ConvEncoder:
 
 def uniform_weight_init(given_scale):
     def f(m):
-        return
+        # return
         if isinstance(m, Linear_Wrapper):
             in_num = m.in_features
             out_num = m.out_features
