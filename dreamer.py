@@ -321,7 +321,7 @@ def main(config):
             )
 
         def random_agent(o, d, s):
-            action = random_actor.rand_sample()
+            action = random_actor.sample()
             logprob = random_actor.log_prob(action)
             return {"action": action, "logprob": logprob}, None
 

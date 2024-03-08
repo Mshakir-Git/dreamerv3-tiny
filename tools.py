@@ -435,6 +435,256 @@ def logsumexp(x, axis=None,dim=1,keepdim=True):
     return Tensor.log(Tensor.sum(Tensor.exp(x - x_max), axis=axis, keepdim=True)) + x_max
 
 
+
+from functools import update_wrapper
+def logits_to_probs(logits:Tensor):
+    return logits.softmax(axis=-1)
+
+def probs_to_logits(probs:Tensor):
+    return Tensor.log(probs)
+
+class lazy_property:
+
+    def __init__(self, wrapped):
+        self.wrapped = wrapped
+        update_wrapper(self, wrapped)
+
+    def __get__(self, instance, obj_type=None):
+        if instance is None:
+            return _lazy_property_and_property(self.wrapped)
+        # with torch.enable_grad():
+        # Tensor.no_grad=False
+        value = self.wrapped(instance)
+        setattr(instance, self.wrapped.__name__, value)
+        return value
+
+
+class _lazy_property_and_property(lazy_property, property):
+    def __init__(self, wrapped):
+        property.__init__(self, wrapped)
+
+class Distribution:
+    def __init__(
+        self,
+        batch_shape = (),
+        event_shape = (),
+        validate_args = None,
+    ):
+        self._batch_shape = batch_shape
+        self._event_shape = event_shape
+        if validate_args is not None:
+            self._validate_args = validate_args
+        super().__init__()
+
+    @property
+    def batch_shape(self):
+        return self._batch_shape
+
+    @property
+    def event_shape(self):
+        return self._event_shape
+
+
+    def _extended_shape(self, sample_shape):
+        # if not isinstance(sample_shape, torch.Size):
+        #     sample_shape = torch.Size(sample_shape)
+        return (sample_shape + self._batch_shape + self._event_shape)
+    
+
+class Categorical(Distribution):
+   
+    def __init__(self, probs=None, logits=None, validate_args=None):
+
+        if (probs is None) == (logits is None):
+            raise ValueError(
+                "Either `probs` or `logits` must be specified, but not both."
+            )
+        if probs is not None:
+            if probs.ndim < 1:
+                raise ValueError("`probs` parameter must be at least one-dimensional.")
+            self.probs = probs / probs.sum(-1, keepdim=True)
+        else:
+            if logits.ndim < 1:
+                raise ValueError("`logits` parameter must be at least one-dimensional.")
+            # Normalize
+            self.logits = logits - logsumexp(logits,axis=-1, keepdim=True)
+            # if(self.logits.shape != tuple((1,6))):
+            #     raise KeyboardInterrupt
+
+        self._param:Tensor = self.probs if probs is not None else self.logits
+        self._num_events = self._param.shape[-1]
+        batch_shape = (
+            self._param.shape[:-1] if self._param.ndim > 1 else ()
+        )
+        self._event_shape = self.param_shape[-1:]
+        super().__init__(batch_shape, validate_args=validate_args)
+
+
+
+    def _new(self, *args, **kwargs):
+        return self._param.new(*args, **kwargs)
+
+
+    @lazy_property
+    def logits(self):
+        return probs_to_logits(self.probs)
+
+    @lazy_property
+    def probs(self):
+        return logits_to_probs(self.logits)
+
+    @property
+    def param_shape(self):
+        return self._param.shape
+
+    # @property
+    # def mean(self):
+    #     return torch.full(
+    #         self._extended_shape(),
+    #         nan,
+    #         dtype=self.probs.dtype,
+    #         device=self.probs.device,
+    #     )
+
+    @property
+    def mode(self):
+        return self.probs.argmax(axis=-1)
+
+    # @property
+    # def variance(self):
+    #     return torch.full(
+    #         self._extended_shape(),
+    #         nan,
+    #         dtype=self.probs.dtype,
+    #         device=self.probs.device,
+    #     )
+
+    def sample(self, sample_shape):
+        # if not isinstance(sample_shape, torch.Size):
+        #     sample_shape = torch.Size(sample_shape)
+        probs_2d = self.probs.reshape(-1, self._num_events)
+        samples_2d = Tensor.multinomial(probs_2d, Tensor.zeros(sample_shape).numel(), True).T
+        return samples_2d.reshape(self._extended_shape(sample_shape))
+
+    def log_prob(self, value):
+        # if self._validate_args:
+        #     self._validate_sample(value)
+        value = value.cast(dtypes.int64).unsqueeze(-1)
+        value, log_pmf = Tensor._broadcasted(value, self.logits)
+        value = value[..., :1]
+        return log_pmf.gather(value,-1).squeeze(-1)
+
+    def entropy(self):
+        # min_real = torch.finfo(self.logits.dtype).min
+        # logits = Tensor.clip(self.logits, min_=min_real)
+        min_real = 2**((self.logits.dtype.itemsize*8)-1)
+        logits = Tensor.clip(self.logits, min_=-min_real ,max_=100000)
+        p_log_p = logits * self.probs
+        return -p_log_p.sum(-1)
+
+    # def enumerate_support(self, expand=True):
+    #     num_events = self._num_events
+    #     values = torch.arange(num_events, dtype=torch.long, device=self._param.device)
+    #     values = values.view((-1,) + (1,) * len(self._batch_shape))
+    #     if expand:
+    #         values = values.expand((-1,) + self._batch_shape)
+    #     return values
+    
+class OneHotCategorical(Distribution):
+  
+    def __init__(self, probs=None, logits=None, validate_args=None):
+        self._categorical = Categorical(probs, logits)
+        self._batch_shape = self._categorical._batch_shape
+        self._event_shape = self._categorical.param_shape[-1:]
+        # super().__init__(batch_shape, event_shape, validate_args=validate_args)
+
+
+    # def _new(self, *args, **kwargs):
+    #     return self._categorical._new(*args, **kwargs)
+
+    # @property
+    # def _param(self):
+    #     return self._categorical._param
+
+    @property
+    def probs(self):
+        return self._categorical.probs
+
+    @property
+    def logits(self):
+        return self._categorical.logits
+    
+    @property
+    def mean(self):
+        return self._categorical.probs
+
+    @property
+    def mode(self):
+        probs:Tensor = self._categorical.probs
+        mode = probs.argmax(axis=-1)
+        return one_hot(mode, num_classes=probs.shape[-1]).cast(probs.dtype)
+
+    @property
+    def variance(self):
+        return self._categorical.probs * (1 - self._categorical.probs)
+
+    @property
+    def param_shape(self):
+        return self._categorical.param_shape
+
+    def sample(self, sample_shape):
+        # sample_shape = (sample_shape)
+        probs = self._categorical.probs
+        num_events = self._categorical._num_events
+        indices = self._categorical.sample(sample_shape)
+        return one_hot(indices, num_events).cast(probs.dtype)
+
+    def log_prob(self, value):
+
+        # if self._validate_args:
+        #     self._validate_sample(value)
+        indices = value.argmax(-1)
+        return self._categorical.log_prob(indices)
+
+    def entropy(self):
+        return self._categorical.entropy()
+
+    # def enumerate_support(self, expand=True):
+    #     n = self.event_shape[0]
+    #     values = torch.eye(n, dtype=self._param.dtype, device=self._param.device)
+    #     values = values.view((n,) + (1,) * len(self.batch_shape) + (n,))
+    #     if expand:
+    #         values = values.expand((n,) + self.batch_shape + (n,))
+    #     return values
+
+
+class OneHotDist(OneHotCategorical):
+    def __init__(self, logits:Tensor=None, probs=None, unimix_ratio=0.0):
+        if logits is not None and unimix_ratio > 0.0:
+            probs = logits.softmax(axis=-1)
+            probs = probs * (1.0 - unimix_ratio) + unimix_ratio / probs.shape[-1]
+            logits = Tensor.log(probs)
+            super().__init__(logits=logits, probs=None)
+        else:
+            super().__init__(logits=logits, probs=probs)
+
+    def mode(self):
+        _mode = one_hot(
+            Tensor.argmax(super().logits, axis=-1), super().logits.shape[-1]
+        )
+        return _mode.detach() + super().logits - super().logits.detach()
+
+    def sample(self, sample_shape=(), seed=None):
+        if seed is not None:
+            raise ValueError("need to check")
+        sample = super().sample(sample_shape)
+        probs = super().probs
+        while len(probs.shape) < len(sample.shape):
+            probs = probs[None]
+        sample = sample + (probs - probs.detach())
+        return sample
+  
+
 class OneHotCategoricalDistribution:
     def __init__(self, probs , logits):
         self.probs = probs
@@ -561,10 +811,12 @@ class OneHotCategoricalDistribution:
         return ret
 
 def one_hot(cat,classes):
-
+    Tensor.no_grad=True
     ret=Tensor.ones((*cat.shape,classes))
     ret=ret.cumsum(-1)-1
     ret=(ret-cat.unsqueeze(-1)).where(0,1)
+    Tensor.no_grad=False
+
     return ret
     # ret=np.zeros((*cat.shape,classes))
 
@@ -588,7 +840,7 @@ def one_hot(cat,classes):
     # return Tensor(ret,dtype=dtypes.float)
      
 GLOBAL_COUNT=0
-class OneHotDist(OneHotCategoricalDistribution):
+class OneHotDist_(OneHotCategoricalDistribution):
     def __init__(self, logits=None, probs=None, unimix_ratio=0.0):
         ##CHECK NORMALISATION (torch categorical)
         if logits is not None and unimix_ratio > 0.0:
@@ -647,7 +899,7 @@ class OneHotDist(OneHotCategoricalDistribution):
             value = value_in.max(-1)[0]
         else:
             value = value_in.max(-1)[1]
-
+        #WRONG use argmax
         value = value.cast(dtypes.float)
         value = value.unsqueeze(-1)
         value, log_pmf = Tensor._broadcasted(value,self.logits)
@@ -1033,7 +1285,9 @@ def lambda_return(reward, value, pcont, bootstrap, lambda_, axis,true_value):
         value = value.permute(dims)
         pcont = pcont.permute(dims)
     if bootstrap is None:
+        raise KeyboardInterrupt
         bootstrap = Tensor.zeros_like(value[-1])
+
     # next_values = Tensor.cat(value[1:], bootstrap[None], dim=0)
     #Hack for nan
     next_values = true_value[1:]
