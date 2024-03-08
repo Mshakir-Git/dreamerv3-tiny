@@ -402,12 +402,15 @@ class WorldModel:
 #         out[i]=out[i]*out[i-1]
 #     return Tensor(out)
 
-def cumprod_dim_0(input:Tensor):
-    out=input.detach()
-    for i in range(input.shape[0])[1:]:
-        out[i]=out[i]*out[i-1]
-    return out.detach()
+# def cumprod_dim_0(input:Tensor):
+#     out=input.detach()
+#     for i in range(input.shape[0])[1:]:
+#         out[i]=out[i]*out[i-1]
+#     return out.detach()
+from tinygrad.helpers import prod
 
+def cumprod(self, axis:int=0, _first_zero=False) -> Tensor:
+    return prod(self.transpose(axis,-1).pad2d((self.shape[axis]-int(not _first_zero),0),1)._pool((self.shape[axis],)).split([1 for i in range(self.shape[axis])],dim=-2)).squeeze(2).transpose(axis,-1)
 
 class ImagBehavior:
     def __init__(self, config, world_model):
@@ -706,8 +709,8 @@ class ImagBehavior:
             axis=0,
             true_value=value
         )
-        weights = cumprod_dim_0(
-            Tensor.cat(*[Tensor.ones_like(discount[:1]), discount[:-1]], dim=0)
+        weights = cumprod(
+            Tensor.cat(*[Tensor.ones_like(discount[:1]), discount[:-1]])
         ).cast(dtypes.float).detach()
         return target, weights, value[:-1]
 
