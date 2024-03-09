@@ -814,7 +814,8 @@ def one_hot(cat,classes):
     Tensor.no_grad=True
     ret=Tensor.ones((*cat.shape,classes))
     ret=ret.cumsum(-1)-1
-    ret=(ret-cat.unsqueeze(-1)).where(0,1)
+    ret=(ret-cat.unsqueeze(-1))
+    ret=Tensor.where(ret==0,1,0)
     Tensor.no_grad=False
 
     return ret

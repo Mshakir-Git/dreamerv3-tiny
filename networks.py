@@ -657,7 +657,7 @@ def trunc_normal_(tensor:Tensor, mean, std, a, b, generator=None):
     return ret_tensor.detach()
     
 def t_weight_init(m):
-    # return
+    return
     if isinstance(m, Linear_Wrapper):
         in_num = m.in_features
         out_num = m.out_features
@@ -792,7 +792,7 @@ class ConvEncoder:
 
 def uniform_weight_init(given_scale):
     def f(m):
-        # return
+        return
         if isinstance(m, Linear_Wrapper):
             in_num = m.in_features
             out_num = m.out_features
