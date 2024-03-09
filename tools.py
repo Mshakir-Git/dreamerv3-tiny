@@ -961,9 +961,12 @@ class DiscDist:
         below = Tensor.clip(below, 0, self.buckets.shape[0] - 1)
         above = Tensor.clip(above, 0, self.buckets.shape[0] - 1)
 
+
+        # equal = below == above
+
         # equal = (below - above).cast(dtypes.int)
         equal = (below - above)
-        equal=equal.where(0,1).cast(dtypes.bool)
+        equal=Tensor.where(equal==0,True,False).cast(dtypes.bool)
         # print("Equal",equal.numpy())
         # print("Equal",equal2.numpy())
         # exit()

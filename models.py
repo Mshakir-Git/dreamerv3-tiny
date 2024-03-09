@@ -191,7 +191,7 @@ class WorldModel:
         # context["embed"].realize(),context["feat"].realize(),
         # context["kl"].realize(),context["postent"].realize()
         # )
-        return post["stoch"].realize(),post["deter"].realize(),post["logit"].realize(),context["embed"].realize(),context["feat"].realize(),context["kl"].realize(),context["postent"].realize(),m_loss.realize()
+        return post["stoch"].realize(),post["deter"].realize(),post["logit"].realize(),context["embed"].realize(),context["feat"].realize(),context["kl"].realize(),context["postent"].realize(),m_loss.realize(),dyn_loss.realize(),rep_loss.realize()
        
     def _train(self, data):
 
@@ -578,7 +578,7 @@ class ImagBehavior:
             # metrics.update(self._value_opt(value_loss, self.value.parameters()))
 
         # metrics_relized=(v.realize() for k,v in metrics.items())
-        return actor_loss.realize(),value_loss.realize(),imag_action.realize(),reward.realize()
+        return actor_loss.realize(),value_loss.realize(),imag_action.realize(),reward.realize(),target.realize()
     
 
 

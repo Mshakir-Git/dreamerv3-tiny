@@ -142,7 +142,7 @@ class Dreamer:
         w_data=data.copy()
         w_data = self._wm.preprocess(w_data)
         w_data={k:v.realize() for k,v in w_data.items()}
-        p_stoch,p_deter,p_logit, c_embed,c_feat,c_kl,c_pontent,loss = self._wm._train_jit(**w_data)
+        p_stoch,p_deter,p_logit, c_embed,c_feat,c_kl,c_pontent,loss,dyn_loss,rep_loss = self._wm._train_jit(**w_data)
         post={"stoch":p_stoch,"deter":p_deter,"logit":p_logit}
         context = dict(embed=c_embed,feat=c_feat,kl=c_kl,postent=c_pontent,)
         start = post
@@ -153,7 +153,10 @@ class Dreamer:
         mets={"wm_loss":loss.numpy()}
         print("Tiny Train Agent")
         # self._expl_behavior._train(start, reward)
-        a_loss,v_loss,i_action,i_reward=self._expl_behavior._train_jit(**start)
+        a_loss,v_loss,i_action,i_reward,target=self._expl_behavior._train_jit(**start)
+        metrics.update(tools.tensorstats(target, "target"))
+        metrics["dyn_loss"] = dyn_loss.numpy()
+        metrics["rep_loss"] = rep_loss.numpy()
         metrics.update(tools.tensorstats(i_reward, "imag_reward"))
         metrics.update(
                 tools.tensorstats(
