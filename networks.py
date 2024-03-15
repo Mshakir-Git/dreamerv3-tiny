@@ -42,6 +42,7 @@ class RSSM():
         embed=None,
         device=None,
     ):
+        self.num_observe=0
         self._stoch = stoch
         self._deter = deter
         self._hidden = hidden
@@ -184,7 +185,7 @@ class RSSM():
             lambda prev_state, prev_act, embed, is_first: self.obs_step(
                 prev_state[0], prev_act, embed, is_first
             ),
-            action, embed, is_first,state
+            action, embed, is_first,self.initial(is_first[0].shape[0])
         )
 
         post={"stoch":post_stoch,"deter":post_deter,"logit":post_logit}
@@ -223,29 +224,83 @@ class RSSM():
         prior = {"stoch": stoch, "deter": deter, **stats}
         return prior
 
-    def obs_step(self, prev_state, prev_action, embed, is_first, sample=True):
-
+    def obs_step(self, prev_state, prev_action, embed, is_first:Tensor, sample=True):
+        # print(prev_state == None,sum(is_first.numpy()) == is_first.shape[0],sum(is_first.numpy()) > 0)
         # initialize all prev_state
-        if prev_state == None or sum(is_first.numpy()) == is_first.shape[0]:
-            # if self.is_first_bypass==0:
-            # print("Once",is_first)
-            self.is_first_bypass+=1
-            prev_state = self.initial(is_first.shape[0])
-            prev_action = Tensor.zeros(*(is_first.shape[0], self._num_actions)) #.to(self._device)
-        # overwrite the prev_state only where is_first=True
-        elif sum(is_first.numpy()) > 0:
-            is_first = is_first[:, None]
-            prev_action *= 1.0 - is_first
-            init_state = self.initial(is_first.shape[0])
-            for key, val in prev_state.items():
-                is_first_r = Tensor.reshape(
-                    is_first,
-                    is_first.shape + (1,) * (len(val.shape) - len(is_first.shape)),
-                )
-                prev_state[key] = (
-                    val * (1.0 - is_first_r) + init_state[key] * is_first_r
-                )
+        # init_mask=(Tensor(is_first.shape[0])-is_first.sum()).cast(dtypes.bool).logical_not()
+        # is_first_mask=is_first.sum()
+        # print(is_first_mask)
+        # exit()
+        is_first.realize()
+        # prev_action_test=None
+        # prev_state_test={}
 
+
+        is_init_cond=Tensor.sum(is_first)==is_first.shape[0]
+        # print(is_init_cond.numpy())
+        # exit()
+        prev_action_init = Tensor.zeros(*(is_first.shape[0], self._num_actions))
+
+        is_first_cond=(Tensor.sum(is_first) > Tensor([0])).mul(is_init_cond.logical_not())
+        # print(is_first_cond.numpy())
+        # exit()
+        is_first_c = is_first[:, None]
+        # print(prev_action.numpy(),is_first_c.numpy())
+        prev_action_is_first =prev_action*(1.0 - is_first_c)
+        init_state_c = self.initial(is_first_c.shape[0])
+        prev_state_c={}
+        for key, val in prev_state.items():
+            is_first_r = Tensor.reshape(
+                is_first_c,
+                is_first_c.shape + (1,) * (len(val.shape) - len(is_first_c.shape)),
+            )
+            prev_state_c[key] = (
+                val * (1.0 - is_first_r) + init_state_c[key] * is_first_r
+            )
+
+        for key, val in prev_state.items():
+            prev_state[key] = prev_state_c[key]*is_first_cond + prev_state[key] * is_first_cond.logical_not()
+        
+        # print(is_init_cond)
+        # print(is_first_cond)
+        # print((is_init_cond.logical_and(is_first_cond)).logical_not())
+        # exit()
+        prev_action=prev_action_init*is_init_cond + prev_action_is_first*is_first_cond + prev_action * (is_init_cond.logical_not() * is_first_cond.logical_not())
+        
+
+
+        # if prev_state == None or sum(is_first.numpy()) == is_first.shape[0]:
+        #     # if self.is_first_bypass==0:
+        #     # print("Once",is_first)
+        #     self.is_first_bypass+=1
+        #     prev_state = self.initial(is_first.shape[0])
+        #     prev_action = Tensor.zeros(*(is_first.shape[0], self._num_actions)) #.to(self._device)
+        #     print(prev_action.numpy())
+        # # overwrite the prev_state only where is_first=True
+        # elif sum(is_first.numpy()) > 0:
+        #     print(self.num_observe)
+        #     print(is_first.numpy())
+        #     is_first = is_first[:, None]
+        #     prev_action *= 1.0 - is_first
+        #     # print(prev_action.numpy())
+        #     # exit()
+        #     init_state = self.initial(is_first.shape[0])
+        #     for key, val in prev_state.items():
+        #         is_first_r = Tensor.reshape(
+        #             is_first,
+        #             is_first.shape + (1,) * (len(val.shape) - len(is_first.shape)),
+        #         )
+        #         prev_state[key] = (
+        #             val * (1.0 - is_first_r) + init_state[key] * is_first_r
+        #         )
+
+        # assert np.array_equal(prev_action_test.detach().numpy(),prev_action.detach().numpy())
+        # for key, val in prev_state.items():
+        #     assert np.array_equal(prev_state_test[key].detach().numpy(),prev_state[key].detach().numpy())
+            
+        # print(prev_state["stoch"].shape)
+        # print(prev_action.shape)
+        # exit()
         prior = self.img_step(prev_state, prev_action)
         x = Tensor.cat(*[prior["deter"], embed], dim=-1)
         # (batch_size, prior_deter + embed) -> (batch_size, hidden)
@@ -958,7 +1013,7 @@ class MLP():
             self._shape = (1,)
         # act = getattr(torch.nn, act)
         self._dist = dist
-        self._std = std if isinstance(std, str) else Tensor([std])
+        self._std = std if isinstance(std, str) else [std]
         self._min_std = min_std
         self._max_std = max_std
         self._absmax = absmax
@@ -1035,7 +1090,10 @@ class MLP():
             if isinstance(self._std, str) and self._std == "learned":
                 std = self.std_layer(out)
             else:
-                std = self._std
+                if isinstance(self._std, str):
+                    std=self._std
+                else:
+                    std = Tensor(self._std)
             return self.dist(self._dist, mean, std, self._shape)
 
     def dist(self, dist, mean, std, shape):

@@ -1437,9 +1437,9 @@ from tinygrad import TinyJit
 
 # @TinyJit
 def static_scan_obs_jit(fn, action, embed, is_first,state):
-    if(state is not None):
-        print(state)
-        exit()
+    # if(state is not None):
+    #     print(state)
+    #     exit()
     inputs=(action, embed, is_first)
     start=(state,state)
     last = start

@@ -102,6 +102,9 @@ class Dreamer:
         obs = self._wm.preprocess(obs)
 
         embed = self._wm.encoder(obs)
+        if(state is None):
+            action = Tensor.zeros(*(obs["is_first"].shape[0], self._wm.dynamics._num_actions)) #Fix nonetype
+            latent = self._wm.dynamics.initial(obs["is_first"].shape[0]) #Fix nonetype
         latent, _ = self._wm.dynamics.obs_step(latent, action, embed, obs["is_first"])
         if self._config.eval_state_mean:
             latent["stoch"] = latent["mean"]

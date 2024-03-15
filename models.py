@@ -116,9 +116,9 @@ class WorldModel:
         )
         params=[]
         for k,v in tnn.state.get_state_dict(self).items():
-            if(k=="heads.reward._std" or k=="heads.cont._std"):
-                pass
-            else:
+            # if(k=="heads.reward._std" or k=="heads.cont._std"):
+            #     pass
+            # else:
                 params.append(v)
         self.opt=tnn.optim.Adam(params,lr=self._config.model_lr,eps=self._config.opt_eps)
 
@@ -415,6 +415,7 @@ def cumprod(self, axis:int=0, _first_zero=False) -> Tensor:
 class ImagBehavior:
     def __init__(self, config, world_model):
         # super(ImagBehavior, self).__init__()
+        self.test_count=0
         self._use_amp = True if config.precision == 16 else False
         self._config = config
         self._world_model = world_model
@@ -500,16 +501,21 @@ class ImagBehavior:
         self._update_slow_target()
         metrics = {}
         start={"stoch":stoch,"deter":deter,"logit":logit}
-        with Tensor.train():
-            objective = lambda f, s, a: self._world_model.heads["reward"](
+        objective = lambda f, s, a: self._world_model.heads["reward"](
             self._world_model.dynamics.get_feat(s)
-            ).mode()
+        ).mode()
+        with Tensor.train():
             #ACTOR
             imag_feat, imag_state, imag_action = self._imagine(
                 start, self.actor, self._config.imag_horizon
             )
             reward = objective(imag_feat, imag_state, imag_action)
             actor_ent = self.actor(imag_feat).entropy()
+            # if self.test_count==7:
+            #     # for k,v in imag_state.items():
+            #     #     print(k,v.numpy())
+            #     exit()
+            # self.test_count+=1
 
             state_ent = self._world_model.dynamics.get_dist(imag_state).entropy()
             # this target is not scaled by ema or sym_log.
@@ -694,12 +700,42 @@ class ImagBehavior:
     def _compute_target(self, imag_feat, imag_state, reward):
         if "cont" in self._world_model.heads:
             inp = self._world_model.dynamics.get_feat(imag_state)
+            # inp_numpy=np.load("torch_inp_file.np",allow_pickle=True)
+            # inp=Tensor(inp_numpy)
+
+            # print(inp.shape)
+            # tiny_inp=inp.detach().numpy()
+            # tiny_inp_file=open("tiny_inp_file.np","wb+")
+            # tiny_inp.dump(tiny_inp_file)
+            # tiny_inp_file.close()
+            # print(self._world_model.heads["cont"].layers[1].weight.detach().numpy())
 
             discount = self._config.discount * self._world_model.heads["cont"](inp).mean
+
+            
+            # print(repr(inp.numpy()))
+            # exit()
         else:
             discount = self._config.discount * Tensor.ones_like(reward)
         
         value = self.value(imag_feat).mode()
+        # print("value",value.numpy())
+        # print("reward",reward.numpy())
+        # print("discount",repr(discount.numpy()))
+
+        
+        # reward2.realize()
+        # print(reward.numpy())
+        
+        # if self.test_count==7:
+        #     # reward=reward7
+        #     # print("value",repr(value.detach().numpy()))
+        #     # print("reward",repr(reward.detach().numpy()))
+        #     # print("discount",repr(discount.detach().numpy()))
+        #     exit()
+        # elif self.test_count==8:
+        #     exit()
+        # self.test_count+=1
         target = tools.lambda_return(
             reward[1:],
             value[:-1],
@@ -712,6 +748,8 @@ class ImagBehavior:
         weights = cumprod(
             Tensor.cat(*[Tensor.ones_like(discount[:1]), discount[:-1]])
         ).cast(dtypes.float).detach()
+        # print("weights",weights.numpy())
+        #e2 reward e1 discount
         return target, weights, value[:-1]
 
     def _compute_actor_loss(
@@ -757,6 +795,19 @@ class ImagBehavior:
         else:
             raise NotImplementedError(self._config.imag_gradient)
         actor_loss = -weights[:-1] * actor_target
+        # if(np.isnan(Tensor.mean(actor_loss).numpy())):
+        #     print("-weight",(-weights[:-1]).numpy())
+        #     print("actor_target",actor_target.numpy())
+    
+        # if self.test_count==7:
+        #     print("target",target.numpy()) #e4 vs e6
+        #     print("-weight",(-weights[:-1]).numpy()) #e3 vs e6
+        #     exit()
+        # else:
+        #     self.test_count+=1
+        # print("actor_target",actor_target.numpy()) e4 vs e6
+        # print(Tensor.mean(actor_loss).numpy())
+        # exit()
         return actor_loss, metrics
 
     def _update_slow_target(self):
@@ -772,17 +823,17 @@ class ImagBehavior:
     def get_value_params(self):
         params=[]
         for k,v in tnn.state.get_state_dict(self.value).items():
-            if(k=="_std"):
-                pass
-            else:
+            # if(k=="_std"):
+            #     pass
+            # else:
                 params.append(v)
         return params
     
     def get_slow_value_params(self):
         params=[]
         for k,v in tnn.state.get_state_dict(self._slow_value).items():
-            if(k=="_std"):
-                pass
-            else:
+            # if(k=="_std"):
+            #     pass
+            # else:
                 params.append(v)
         return params
